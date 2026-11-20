@@ -30,6 +30,8 @@ import { demoUsers, zohoDirectoryAccounts, type ZohoAccountProfile } from '@/ser
 import { getZohoConfig, getZohoAuthorizationUrl, handleZohoCallback } from '@/services/zohoAuthService'
 import type { AuthUser } from '@/types/auth'
 import FormInput from '@/components/forms/FormInput.vue'
+import { isMockApi } from '@/services/apiClient'
+import { DEMO_PASSWORD, loginWithPassword, loginWithZohoCode, type BackendSession } from '@/services/backendAuth'
 
 const router = useRouter()
 const route = useRoute()
@@ -70,6 +72,10 @@ onMounted(async () => {
       const server =
         (route.query['accounts-server'] as string) ||
         (route.query.location === 'in' ? 'https://accounts.zoho.in' : undefined)
+      if (!isMockApi()) {
+        await completeBackendLogin(await loginWithZohoCode(code, zohoConfig.redirectUri, server))
+        return
+      }
       const result = await handleZohoCallback(code, server)
       if (result.success && result.user && result.token) {
         dispatch(
@@ -94,7 +100,22 @@ onMounted(async () => {
   }
 })
 
-const handleDemoLogin = (profileKey: 'admin' | 'manager' | 'employee') => {
+const completeBackendLogin = async (session: BackendSession) => {
+  dispatch(loginSuccess({ user: session.user, token: session.token, expiresAt: session.expiresAt }))
+  const redirect = (route.query.redirect as string) || '/'
+  await router.push(redirect)
+}
+
+const handleDemoLogin = async (profileKey: 'admin' | 'manager' | 'employee') => {
+  if (!isMockApi()) {
+    loginError.value = ''
+    try {
+      await completeBackendLogin(await loginWithPassword(demoUsers[profileKey].email, DEMO_PASSWORD))
+    } catch (err: any) {
+      loginError.value = err.message
+    }
+    return
+  }
   const profile = demoUsers[profileKey]
   if (profile) {
     dispatch(
@@ -110,6 +131,14 @@ const handleDemoLogin = (profileKey: 'admin' | 'manager' | 'employee') => {
 
 const onSubmit = handleSubmit(async (values) => {
   loginError.value = ''
+  if (!isMockApi()) {
+    try {
+      await completeBackendLogin(await loginWithPassword(values.email, values.password))
+    } catch (err: any) {
+      loginError.value = err.message
+    }
+    return
+  }
   // Demo authentication check
   const matched = Object.values(demoUsers).find(
     (u) => u.email.toLowerCase() === values.email.toLowerCase()
@@ -141,6 +170,23 @@ const handleSelectZohoAccount = async (account: ZohoAccountProfile) => {
 
   // Simulate OAuth authorization delay
   await new Promise((r) => setTimeout(r, 600))
+
+  if (!isMockApi()) {
+    // Simulated directory accounts map to the seeded demo users.
+    const demo = Object.values(demoUsers).find((u) => u.employeeId === account.employeeId)
+    try {
+      if (!account.hasPortalAccess || !demo) throw new Error(`Access Denied: The Zoho identity "${account.email}" is not provisioned in the AGAM HRMS directory.`)
+      const session = await loginWithPassword(demo.email, DEMO_PASSWORD)
+      session.user = { ...session.user, authProvider: 'zoho', zohoId: account.zohoId, zohoAccountType: account.zohoAccountType }
+      isZohoModalOpen.value = false
+      await completeBackendLogin(session)
+    } catch (err: any) {
+      zohoError.value = err.message
+    } finally {
+      zohoAuthenticating.value = false
+    }
+    return
+  }
 
   if (!account.hasPortalAccess) {
     zohoAuthenticating.value = false
@@ -279,6 +325,7 @@ const handleCustomZohoSubmit = () => {
             <span>Authenticate Securely</span>
             <ArrowRight class="w-4 h-4" />
           </button>
+          <p v-if="loginError" class="text-sm text-rose-600 dark:text-rose-400 text-center" role="alert">{{ loginError }}</p>
         </form>
       </div>
 

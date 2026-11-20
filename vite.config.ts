@@ -34,8 +34,8 @@ export default defineConfig(({ mode }) => {
             req.on('end', async () => {
               try {
                 const payload = JSON.parse(body || '{}')
-                const clientId = env.VITE_ZOHO_CLIENT_ID || payload.client_id || '1000.9I5RNGD1I9CLRSEFUOG7NOXD5Z1O2Z'
-                const clientSecret = env.VITE_ZOHO_CLIENT_SECRET || payload.client_secret || '27e945ca308637ef278d7519c2481035a868c8348e'
+                const clientId = env.VITE_ZOHO_CLIENT_ID || payload.client_id || ''
+                const clientSecret = env.VITE_ZOHO_CLIENT_SECRET || payload.client_secret || ''
                 const accountsServer = payload.accounts_server || 'https://accounts.zoho.in'
                 const tokenUrl = env.VITE_ZOHO_TOKEN_URL || (accountsServer ? `${accountsServer}/oauth/v2/token` : 'https://accounts.zoho.in/oauth/v2/token')
 
@@ -90,6 +90,15 @@ export default defineConfig(({ mode }) => {
         },
       },
     ],
+    server: {
+      // Forward API calls to the Core HRMS Rails backend during development.
+      proxy: {
+        '/api/v1': {
+          target: env.VITE_API_PROXY_TARGET || 'http://localhost:3000',
+          changeOrigin: true,
+        },
+      },
+    },
     resolve: {
       alias: {
         '@': fileURLToPath(new URL('./src', import.meta.url)),

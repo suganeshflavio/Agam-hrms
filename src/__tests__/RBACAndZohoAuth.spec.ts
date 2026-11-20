@@ -28,14 +28,14 @@ describe('RBAC, Zoho Auth & Security Scoping Tests', () => {
   // 1b. Live Zoho OAuth 2.0 Configuration and URL Generation
   it('loads Zoho OAuth credentials and generates compliant authorization URL', () => {
     const config = getZohoConfig()
-    expect(config.clientId).toBe('1000.9I5RNGD1I9CLRSEFUOG7NOXD5Z1O2Z')
-    expect(config.clientSecret).toBe('27e945ca308637ef278d7519c2481035a868c8348e')
+    // Credentials come from the environment, never hardcoded in source.
+    expect(config.clientId).toBe(import.meta.env.VITE_ZOHO_CLIENT_ID || '')
     expect(config.authUrl).toMatch(/accounts\.zoho\.(in|com)\/oauth\/v2\/auth/)
     expect(config.redirectUri).toBe('http://localhost:5173/auth/callback')
 
     const authUrl = getZohoAuthorizationUrl('custom_state_token')
     expect(authUrl).toMatch(/https:\/\/accounts\.zoho\.(in|com)\/oauth\/v2\/auth/)
-    expect(authUrl).toContain('client_id=1000.9I5RNGD1I9CLRSEFUOG7NOXD5Z1O2Z')
+    expect(authUrl).toContain(`client_id=${encodeURIComponent(config.clientId)}`)
     expect(authUrl).toContain('redirect_uri=http%3A%2F%2Flocalhost%3A5173%2Fauth%2Fcallback')
     expect(authUrl).toContain('response_type=code')
     expect(authUrl).toContain('state=custom_state_token')

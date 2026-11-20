@@ -13,8 +13,10 @@ export interface ZohoOAuthConfig {
 
 export const getZohoConfig = (): ZohoOAuthConfig => {
   return {
-    clientId: import.meta.env.VITE_ZOHO_CLIENT_ID || '1000.9I5RNGD1I9CLRSEFUOG7NOXD5Z1O2Z',
-    clientSecret: import.meta.env.VITE_ZOHO_CLIENT_SECRET || '27e945ca308637ef278d7519c2481035a868c8348e',
+    clientId: import.meta.env.VITE_ZOHO_CLIENT_ID || '',
+    // Mock mode only. With the backend, the code exchange happens server-side
+    // (ZOHO_CLIENT_SECRET on core_hrms) and no secret reaches the browser.
+    clientSecret: import.meta.env.VITE_ZOHO_CLIENT_SECRET || '',
     authUrl: import.meta.env.VITE_ZOHO_AUTH_URL || 'https://accounts.zoho.in/oauth/v2/auth',
     tokenUrl: import.meta.env.VITE_ZOHO_TOKEN_URL || 'https://accounts.zoho.in/oauth/v2/token',
     userinfoUrl: import.meta.env.VITE_ZOHO_USERINFO_URL || 'https://accounts.zoho.in/oauth/v2/userinfo',
