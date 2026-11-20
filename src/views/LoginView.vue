@@ -31,6 +31,7 @@ import { getZohoConfig, getZohoAuthorizationUrl, handleZohoCallback } from '@/se
 import type { AuthUser } from '@/types/auth'
 import FormInput from '@/components/forms/FormInput.vue'
 import { isMockApi } from '@/services/apiClient'
+import { hrmsApi } from '@/redux/api/hrmsApi'
 import { DEMO_PASSWORD, loginWithPassword, loginWithZohoCode, type BackendSession } from '@/services/backendAuth'
 
 const router = useRouter()
@@ -102,6 +103,9 @@ onMounted(async () => {
 
 const completeBackendLogin = async (session: BackendSession) => {
   dispatch(loginSuccess({ user: session.user, token: session.token, expiresAt: session.expiresAt }))
+  // Data requested before login (e.g. the sidebar's role list) failed with 401; refetch it.
+  dispatch(hrmsApi.util.invalidateTags(['Stats', 'Company', 'Branches', 'Departments', 'Designations', 'Roles', 'Employees',
+    'Onboarding', 'Shifts', 'Attendance', 'Regularizations', 'Leaves', 'Payroll', 'MasterData', 'Workflows']))
   const redirect = (route.query.redirect as string) || '/'
   await router.push(redirect)
 }

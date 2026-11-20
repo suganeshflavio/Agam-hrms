@@ -82,6 +82,8 @@ export interface RequestOptions {
 /** Performs a request and returns the `data` field of the backend envelope. */
 export async function apiRequest<T = any>(path: string, options: RequestOptions = {}): Promise<T> {
   const { method = 'GET', body, query, auth = true } = options
+  // Not logged in yet (e.g. layout data on the login page): don't call the server.
+  if (auth && !tokenStore.get()) throw { status: 401, data: 'Not signed in' } as ApiError
   if (auth) await refreshIfNeeded()
 
   const params = new URLSearchParams()
