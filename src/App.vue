@@ -3,12 +3,14 @@ import { onMounted } from 'vue'
 import { RouterView, useRoute } from 'vue-router'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import { useTheme } from '@/composables/useTheme'
+import { startSessionSync } from '@/services/sessionSync'
 
 const route = useRoute()
 const { initTheme } = useTheme()
 
 onMounted(() => {
   initTheme()
+  startSessionSync()
 })
 </script>
 

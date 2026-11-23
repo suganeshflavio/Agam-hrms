@@ -20,30 +20,18 @@ import {
   ShieldCheck,
 } from '@lucide/vue'
 import { hrmsApi } from '@/redux/api/hrmsApi'
-import { useApiQuery, useApiMutation, useAppSelector } from '@/redux/vueAdapter'
+import { useApiQuery, useApiMutation } from '@/redux/vueAdapter'
 import { apiRequest, type ApiError } from '@/services/apiClient'
 import type { Employee, Department, Branch } from '@/types/hrms'
 import AddEmployeeWizard from '@/components/employees/AddEmployeeWizard.vue'
+import { useMoney } from '@/composables/useMoney'
+import { usePermissions } from '@/composables/usePermissions'
 
 const router = useRouter()
-const currentUser = useAppSelector((state) => state.auth.user)
-const isSuperAdmin = computed(() => {
-  const r = (currentUser.value?.role || '').toLowerCase()
-  return (
-    !r ||
-    r.includes('admin') ||
-    r.includes('hr') ||
-    r === 'super admin' ||
-    r === 'hr manager' ||
-    r === 'hr super admin' ||
-    r === 'recruiter' ||
-    r === 'payroll specialist'
-  )
-})
-const isDepartmentManager = computed(() => {
-  const r = (currentUser.value?.role || '').toLowerCase()
-  return r.includes('manager') && !isSuperAdmin.value
-})
+const { formatMoney } = useMoney()
+// Access follows HR Administration -> Roles & Permissions ("Employee Onboarding" row).
+const { user: currentUser, can } = usePermissions()
+const canViewAll = computed(() => can('employees', 'view'))
 
 // Redux API Queries & Mutations
 const { data: employees, isLoading } = useApiQuery<Employee[]>(hrmsApi.endpoints.getEmployees)
@@ -66,39 +54,18 @@ const onEmployeeCreated = (employee: Employee) => {
   }, 3500)
 }
 
-// Role-Based Access Scoping:
-// Super Admin / HR can see ALL employees across the organization.
-// Next role-based users (Department Managers) see their department employees.
-// General Employees see their department/team or fallback to directory.
+// Read access on "Employee Onboarding" shows everyone; otherwise the user
+// sees themself and the people who report to them.
 const roleScopedEmployees = computed(() => {
   const all = employees.value || []
-  if (!all.length) return []
-
-  if (isSuperAdmin.value) {
-    return all
-  }
-  if (isDepartmentManager.value) {
-    const dept = (currentUser.value?.department || '').toLowerCase()
-    const managerName = (currentUser.value?.name || '').toLowerCase()
-    const scoped = all.filter(
-      (e) =>
-        (dept && (e.department || '').toLowerCase() === dept) ||
-        (managerName && (e.reportingManagerName || '').toLowerCase() === managerName)
-    )
-    return scoped.length > 0 ? scoped : all
-  }
-  const myId = currentUser.value?.employeeId || currentUser.value?.id
-  const myDept = (currentUser.value?.department || '').toLowerCase()
-  const myMatches = all.filter(
-    (e) =>
-      (myId && (e.id === myId || e.employeeCode === myId)) ||
-      (myDept && (e.department || '').toLowerCase() === myDept)
-  )
-  return myMatches.length > 0 ? myMatches : all
+  if (canViewAll.value) return all
+  const myId = currentUser.value?.employeeId
+  if (!myId) return []
+  return all.filter((e) => e.id === myId || e.reportingManagerId === myId)
 })
 
 const filteredEmployees = computed(() => {
-  const source = roleScopedEmployees.value.length > 0 ? roleScopedEmployees.value : (employees.value || [])
+  const source = roleScopedEmployees.value
   const q = (searchQuery.value || '').toLowerCase().trim()
   return source.filter((emp) => {
     if (!emp) return false
@@ -117,16 +84,14 @@ const filteredEmployees = computed(() => {
       selectedStatus.value === 'All' || emp.status === selectedStatus.value
 
     const matchesBranch =
-      selectedBranch.value === 'All' || (emp.branch || 'San Francisco HQ') === selectedBranch.value
+      selectedBranch.value === 'All' || emp.branch === selectedBranch.value
 
     return matchesSearch && matchesDept && matchesStatus && matchesBranch
   })
 })
 
-// Password reset (Super Admin / HR with user-management rights)
-const canManageAccounts = computed(() =>
-  currentUser.value?.permissions?.some((p) => p.module === 'admin' && p.actions.create) ?? false,
-)
+// Password reset needs user-management rights (HR Administration -> Write)
+const canManageAccounts = computed(() => can('admin', 'create'))
 const resetResult = ref<{ name: string; email: string; password: string; emailSent: boolean } | null>(null)
 const resetError = ref('')
 const resettingId = ref<string | null>(null)
@@ -182,7 +147,7 @@ const exportToCsv = () => {
     `"${e.department}"`,
     `"${e.designation}"`,
     `"${e.grade || ''}"`,
-    `"${e.branch || 'San Francisco HQ'}"`,
+    `"${e.branch || ''}"`,
     `"${e.employmentType}"`,
     `"${e.status}"`,
     `"${e.joiningDate}"`,
@@ -206,7 +171,7 @@ const exportToCsv = () => {
     <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
       <div>
         <h1 class="text-2xl font-extrabold tracking-tight text-slate-900 dark:text-white">
-          Employee Directory
+          Employee Onboarding
         </h1>
         <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">
           Manage 360° employee profiles, organizational hierarchies, documents, and promotions
@@ -216,7 +181,7 @@ const exportToCsv = () => {
       <div class="flex items-center gap-2">
         <!-- Scope Badge -->
         <span
-          v-if="isSuperAdmin"
+          v-if="canViewAll"
           class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 text-xs font-semibold"
         >
           <ShieldCheck class="w-3.5 h-3.5" />
@@ -227,10 +192,11 @@ const exportToCsv = () => {
           class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-50 dark:bg-blue-950 text-[#0e6db3] dark:text-[#38a5e4] border border-blue-200 dark:border-blue-800 text-xs font-semibold"
         >
           <Building class="w-3.5 h-3.5" />
-          <span>{{ currentUser?.department }} Team Only</span>
+          <span>My Team Only</span>
         </span>
 
         <button
+          v-if="can('employees', 'export')"
           @click="exportToCsv"
           class="inline-flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-semibold text-xs transition-colors cursor-pointer"
         >
@@ -238,8 +204,8 @@ const exportToCsv = () => {
           <span>Export CSV</span>
         </button>
         <button
+          v-if="can('employees', 'create')"
           @click="isModalOpen = true"
-          :disabled="!isSuperAdmin"
           class="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#1989d9] hover:bg-[#0e6db3] text-white font-semibold text-xs shadow-md shadow-[#1989d9]/20 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
         >
           <UserPlus class="w-4 h-4" />
@@ -345,7 +311,7 @@ const exportToCsv = () => {
                     @click="router.push(`/employees/${emp.id}`)"
                     class="w-9 h-9 rounded-full bg-gradient-to-tr from-indigo-500 to-purple-500 text-white flex items-center justify-center font-bold text-xs shrink-0 cursor-pointer hover:scale-105 transition-transform"
                   >
-                    {{ (emp.firstName || 'E')[0] }}{{ (emp.lastName || 'M')[0] }}
+                    {{ (emp.firstName || '').charAt(0) }}{{ (emp.lastName || '').charAt(0) }}
                   </div>
                   <div>
                     <button
@@ -366,8 +332,8 @@ const exportToCsv = () => {
                 <p class="text-xs text-slate-500 dark:text-slate-400">{{ emp.department }}</p>
               </td>
               <td class="py-4 px-6">
-                <p class="text-xs font-medium text-slate-800 dark:text-slate-200">{{ emp.branch || 'San Francisco HQ' }}</p>
-                <p class="text-[11px] text-slate-400 truncate max-w-[150px]">{{ emp.grade || 'Lead P2' }}</p>
+                <p class="text-xs font-medium text-slate-800 dark:text-slate-200">{{ emp.branch || '—' }}</p>
+                <p class="text-[11px] text-slate-400 truncate max-w-[150px]">{{ emp.grade || '—' }}</p>
               </td>
               <td class="py-4 px-6">
                 <span
@@ -386,7 +352,7 @@ const exportToCsv = () => {
                 </span>
               </td>
               <td class="py-4 px-6 text-xs font-bold text-slate-800 dark:text-slate-200">
-                ${{ (emp.salary || 0).toLocaleString() }}/yr
+                {{ emp.salary ? `${formatMoney(emp.salary)}/yr` : '—' }}
               </td>
               <td class="py-4 px-6 text-right">
                 <div class="flex items-center justify-end gap-1.5">
@@ -407,6 +373,7 @@ const exportToCsv = () => {
                     <KeyRound class="w-4 h-4" />
                   </button>
                   <button
+                    v-if="can('employees', 'delete')"
                     @click="handleDelete(emp.id, `${emp.firstName} ${emp.lastName}`)"
                     title="Remove Employee"
                     class="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"

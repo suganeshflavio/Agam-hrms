@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { store } from '@/redux/store'
+import { can, type PermissionModule } from '@/composables/usePermissions'
 
 import DashboardView from '@/views/DashboardView.vue'
 import LoginView from '@/views/LoginView.vue'
@@ -59,7 +60,7 @@ const router = createRouter({
       path: '/admin',
       name: 'admin',
       component: AdminView,
-      meta: { requiresAuth: true, roles: ['Super Admin', 'HR Manager'] },
+      meta: { requiresAuth: true, permission: 'admin' },
     },
     {
       path: '/master-data',
@@ -70,19 +71,19 @@ const router = createRouter({
       path: '/employees',
       name: 'employees',
       component: EmployeesView,
-      meta: { requiresAuth: true },
+      meta: { requiresAuth: true, permission: 'employees' },
     },
     {
       path: '/employees/:id',
       name: 'employee-profile',
       component: () => import('@/views/EmployeeProfileView.vue'),
-      meta: { requiresAuth: true },
+      meta: { requiresAuth: true, permission: 'employees' },
     },
     {
       path: '/onboarding',
       name: 'onboarding',
       component: OnboardingView,
-      meta: { requiresAuth: true },
+      meta: { requiresAuth: true, permission: 'employees' },
     },
     {
       path: '/attendance',
@@ -100,7 +101,7 @@ const router = createRouter({
       path: '/payroll',
       name: 'payroll',
       component: PayrollView,
-      meta: { requiresAuth: true, roles: ['Super Admin', 'HR Manager', 'Payroll Specialist'] },
+      meta: { requiresAuth: true, permission: 'payroll' },
     },
     {
       path: '/self-service',
@@ -112,7 +113,7 @@ const router = createRouter({
       path: '/departments',
       name: 'departments',
       component: DepartmentsView,
-      meta: { requiresAuth: true },
+      meta: { requiresAuth: true, permission: 'admin' },
     },
     {
       path: '/:pathMatch(.*)*',
@@ -143,11 +144,9 @@ router.beforeEach((to) => {
     return '/change-password'
   }
 
-  // Role check if configured on route
-  if (to.meta.roles && Array.isArray(to.meta.roles)) {
-    if (user && !to.meta.roles.includes(user.role)) {
-      return '/'
-    }
+  // Module access from Roles & Permissions (Read = can open the page)
+  if (typeof to.meta.permission === 'string' && !can(user?.permissions, to.meta.permission as PermissionModule, 'view')) {
+    return '/'
   }
 
   return true

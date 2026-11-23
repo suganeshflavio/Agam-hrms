@@ -6,7 +6,6 @@ import {
   ShieldCheck,
   Users,
   UserCheck,
-  UserPlus,
   Clock,
   CalendarCheck,
   Banknote,
@@ -14,7 +13,6 @@ import {
   Menu,
   X,
   Bell,
-  Search,
   ChevronLeft,
   ChevronRight,
   PanelLeftClose,
@@ -26,9 +24,8 @@ import AppLogo from '@/components/common/AppLogo.vue'
 import ZohoAuthLogo from '@/components/common/ZohoAuthLogo.vue'
 import { hrmsApi } from '@/redux/api/hrmsApi'
 import { useAppSelector, useAppDispatch, useApiQuery } from '@/redux/vueAdapter'
-import { switchRole, logout } from '@/redux/slices/authSlice'
-import type { SystemRoleType } from '@/types/auth'
-import type { RolePermission } from '@/types/hrms'
+import { logout } from '@/redux/slices/authSlice'
+import type { HRMSDashboardStats } from '@/types/hrms'
 
 const route = useRoute()
 const router = useRouter()
@@ -44,18 +41,21 @@ const toggleSidebar = () => {
 }
 
 const authUser = useAppSelector((state) => state.auth.user)
-const { data: dbRoles } = useApiQuery<RolePermission[]>(hrmsApi.endpoints.getRoles)
 
-// Dynamic Navigation Scoping: Menu visibility strictly tied to Read/View permissions in Roles & Permissions
+const { data: stats } = useApiQuery<HRMSDashboardStats>(hrmsApi.endpoints.getStats)
+
+// Backend permission flags for a UI module key (admin, employees, attendance, leaves, payroll, ...).
+const can = (module: string, action: 'view' | 'approve' = 'view') =>
+  !!authUser.value?.permissions?.find((p) => p.module === module)?.actions?.[action]
+
+// Unread-style dot only when there is something the user can actually act on.
+const hasPendingApprovals = computed(() => can('leaves', 'approve') && (stats.value?.pendingLeaveRequests ?? 0) > 0)
+
+// Menu visibility follows HR Administration -> Roles & Permissions (the
+// "Read" column), sent by the backend and refreshed without re-login.
+// Own attendance, leave and self-service only need an employee profile.
 const navSections = computed(() => {
-  const currentRoleName = authUser.value?.role || 'General Employee'
-  const isSuper = (currentRoleName || '').toLowerCase().includes('admin') || currentRoleName === 'Super Admin'
-
-  const matchedRole = (dbRoles.value || []).find((r) => {
-    const rName = r.roleName.toLowerCase()
-    const cName = currentRoleName.toLowerCase()
-    return rName === cName || rName.startsWith(cName) || cName.startsWith(rName)
-  })
+  const hasEmployeeProfile = !!authUser.value?.employeeId
 
   const sections = [
     {
@@ -68,51 +68,13 @@ const navSections = computed(() => {
       title: 'Release 1 • Core HRMS',
       badge: 'Active',
       items: [
-        { name: 'HR Administration', path: '/admin', icon: ShieldCheck, moduleKey: 'HR Administration' },
-        { name: 'Employee Directory', path: '/employees', icon: Users, moduleKey: 'Employee Management' },
-        { name: 'Onboarding', path: '/onboarding', icon: UserPlus, moduleKey: 'Onboarding' },
-        { name: 'Attendance & Shifts', path: '/attendance', icon: Clock, moduleKey: 'Attendance' },
-        { name: 'Leave Management', path: '/leaves', icon: CalendarCheck, moduleKey: 'Leave Management' },
-        { name: 'Payroll & Tax', path: '/payroll', icon: Banknote, moduleKey: 'Payroll' },
-        { name: 'Employee Self-Service', path: '/self-service', icon: UserCheck, moduleKey: 'Employee Self-Service' },
-      ].filter((item) => {
-        // Super Admin has full view of all core modules
-        if (isSuper) return true
-
-        // Department Manager can hide / never see HR Administration
-        if (currentRoleName.toLowerCase().includes('manager') && item.name === 'HR Administration') {
-          return false
-        }
-
-        // Employee user can access Leave Management, Attendance & Shifts, and Employee Self-Service
-        if (
-          currentRoleName.toLowerCase().includes('employee') &&
-          ['Leave Management', 'Attendance & Shifts', 'Employee Self-Service'].includes(item.name)
-        ) {
-          return true
-        }
-
-        // Dynamic Role-Based Access: Check if this role has read/view permission for this module
-        if (matchedRole && matchedRole.permissions) {
-          const perm = matchedRole.permissions.find(
-            (p) =>
-              p.module.toLowerCase() === item.moduleKey.toLowerCase() ||
-              (item.moduleKey === 'Leave Management' && p.module.toLowerCase().includes('leave')) ||
-              (item.moduleKey === 'Attendance' && p.module.toLowerCase().includes('attendance')) ||
-              (item.moduleKey === 'Employee Management' && p.module.toLowerCase().includes('employee'))
-          )
-          if (perm) {
-            return perm.read === true
-          }
-        }
-
-        // Standard defaults
-        if (item.name === 'Employee Self-Service') return true
-        if (currentRoleName === 'HR Manager') return true
-        if (currentRoleName === 'Department Manager' && ['Attendance & Shifts', 'Leave Management', 'Employee Directory'].includes(item.name)) return true
-        if (currentRoleName === 'Payroll Specialist' && ['Payroll & Tax', 'Employee Directory'].includes(item.name)) return true
-        return false
-      }),
+        { name: 'HR Administration', path: '/admin', icon: ShieldCheck, permission: 'admin' },
+        { name: 'Employee Onboarding', path: '/employees', icon: Users, permission: 'employees' },
+        { name: 'Attendance & Shifts', path: '/attendance', icon: Clock, permission: 'attendance', selfService: true },
+        { name: 'Leave Management', path: '/leaves', icon: CalendarCheck, permission: 'leaves', selfService: true },
+        { name: 'Payroll & Tax', path: '/payroll', icon: Banknote, permission: 'payroll' },
+        { name: 'Employee Self-Service', path: '/self-service', icon: UserCheck, selfService: true },
+      ].filter((item) => (item.selfService && hasEmployeeProfile) || (item.permission ? can(item.permission) : false)),
     },
   ]
 
@@ -123,11 +85,6 @@ const isActive = (path: string) => {
   if (!route || !route.path) return false
   if (path === '/') return route.path === '/'
   return route.path.startsWith(path)
-}
-
-const handleRoleSwitch = (e: Event) => {
-  const target = e.target as HTMLSelectElement
-  dispatch(switchRole(target.value as SystemRoleType))
 }
 
 const handleLogout = () => {
@@ -260,7 +217,7 @@ const handleLogout = () => {
                 </p>
               </div>
               <p class="text-[10px] text-slate-500 dark:text-slate-400 truncate">
-                {{ authUser?.role || 'Employee' }}
+                {{ authUser?.role || '—' }}
                 <span v-if="authUser?.authProvider === 'zoho'" class="text-[#0e6db3] dark:text-[#38a5e4] font-semibold"> • Zoho OneAuth</span>
               </p>
             </div>
@@ -277,7 +234,7 @@ const handleLogout = () => {
         <!-- Collapsed Profile View -->
         <div v-else class="flex flex-col items-center gap-2">
           <div
-            :title="`${authUser?.name} (${authUser?.role})`"
+            :title="`${authUser?.name || ''} (${authUser?.role || '—'})`"
             class="w-9 h-9 rounded-full bg-gradient-to-tr from-[#044663] to-[#1989d9] flex items-center justify-center text-white font-bold text-xs shadow-xs cursor-pointer"
           >
             {{ (authUser?.name || 'U').split(' ').filter(Boolean).map(n => n[0]).join('') }}
@@ -354,39 +311,14 @@ const handleLogout = () => {
     <div class="flex-1 flex flex-col min-w-0 min-h-screen">
       <!-- Desktop Top Navbar -->
       <header class="hidden md:flex h-16 items-center justify-between px-8 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 sticky top-0 z-10">
-        <div class="flex items-center gap-4 flex-1 max-w-md">
-          <div class="relative w-full">
-            <Search class="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-            <input
-              type="text"
-              placeholder="Search employees, documents, departments, attendance..."
-              class="w-full pl-9 pr-4 py-2 text-xs bg-slate-100 dark:bg-slate-800/60 border border-transparent focus:border-[#1989d9] dark:focus:border-[#38a5e4] rounded-xl focus:outline-hidden transition-all text-slate-800 dark:text-slate-200 placeholder:text-slate-400"
-            />
-          </div>
-        </div>
+        <div class="flex-1"></div>
 
         <div class="flex items-center gap-3">
-          <!-- Role Switcher -->
-          <div class="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200/80 dark:border-slate-700 text-xs">
-            <span class="text-[10px] font-bold uppercase text-slate-400">Role:</span>
-            <select
-              :value="authUser?.role || 'Super Admin'"
-              @change="handleRoleSwitch"
-              class="bg-transparent font-semibold text-[#0e6db3] dark:text-[#38a5e4] focus:outline-hidden cursor-pointer"
-            >
-              <option value="Super Admin">Super Admin</option>
-              <option value="HR Manager">HR Manager</option>
-              <option value="Department Manager">Department Manager</option>
-              <option value="Payroll Specialist">Payroll Specialist</option>
-              <option value="General Employee">General Employee</option>
-            </select>
-          </div>
-
           <ThemeToggle />
           <div class="h-6 w-px bg-slate-200 dark:bg-slate-800 mx-1"></div>
           <button class="relative p-2 rounded-xl text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
             <Bell class="w-4 h-4" />
-            <span class="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-rose-500 ring-2 ring-white dark:ring-slate-900"></span>
+            <span v-if="hasPendingApprovals" class="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-rose-500 ring-2 ring-white dark:ring-slate-900"></span>
           </button>
         </div>
       </header>

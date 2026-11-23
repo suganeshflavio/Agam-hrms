@@ -20,19 +20,20 @@ import {
 import { hrmsApi } from '@/redux/api/hrmsApi'
 import { useApiQuery, useApiMutation, useAppSelector } from '@/redux/vueAdapter'
 import type { AttendanceRecord, Shift, Employee } from '@/types/hrms'
+import DepartmentAttendanceRegister from '@/components/attendance/DepartmentAttendanceRegister.vue'
+import AttendanceCalendar from '@/components/attendance/AttendanceCalendar.vue'
+import { usePermissions } from '@/composables/usePermissions'
 
 const currentUser = useAppSelector((state) => state.auth.user)
-const currentUserId = computed(() => currentUser.value?.employeeId || currentUser.value?.id || 'emp-1')
-const currentUserName = computed(() => currentUser.value?.name || 'Sarah Connor')
-const currentUserRole = computed(() => currentUser.value?.role || 'Super Admin')
-const isSuperAdmin = computed(() => {
-  const r = (currentUser.value?.role || '').toLowerCase()
-  return !r || r.includes('admin') || r.includes('hr') || r === 'super admin' || r === 'hr manager'
-})
-const isDepartmentManager = computed(() => {
-  const r = (currentUser.value?.role || '').toLowerCase()
-  return r.includes('manager') && !isSuperAdmin.value
-})
+// Logins without an employee profile cannot punch attendance.
+const currentUserId = computed(() => currentUser.value?.employeeId || '')
+const currentUserName = computed(() => currentUser.value?.name || '')
+const currentUserRole = computed(() => currentUser.value?.role || '—')
+const hasEmployeeProfile = computed(() => !!currentUser.value?.employeeId)
+const noProfileHint = "Your login isn't linked to an employee profile. Add yourself as an employee with your login email."
+// Access from Roles & Permissions: Attendance row.
+const { can } = usePermissions()
+const canViewAll = computed(() => can('attendance', 'view'))
 
 // Redux Queries & Mutations
 const { data: attendance } = useApiQuery<AttendanceRecord[]>(hrmsApi.endpoints.getAttendance)
@@ -49,10 +50,10 @@ const isShiftModalOpen = ref(false)
 const isEditingShift = ref(false)
 const editingShiftId = ref<string | null>(null)
 const shiftName = ref('')
-const shiftStartTime = ref('09:00 AM')
-const shiftEndTime = ref('06:00 PM')
-const shiftGraceMinutes = ref(15)
-const shiftActiveDays = ref<string[]>(['Mon', 'Tue', 'Wed', 'Thu', 'Fri'])
+const shiftStartTime = ref('')
+const shiftEndTime = ref('')
+const shiftGraceMinutes = ref(0)
+const shiftActiveDays = ref<string[]>([])
 const allWeekDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
 const toggleShiftDay = (day: string) => {
@@ -67,10 +68,10 @@ const openAddShiftModal = () => {
   isEditingShift.value = false
   editingShiftId.value = null
   shiftName.value = ''
-  shiftStartTime.value = '09:00 AM'
-  shiftEndTime.value = '06:00 PM'
-  shiftGraceMinutes.value = 15
-  shiftActiveDays.value = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri']
+  shiftStartTime.value = ''
+  shiftEndTime.value = ''
+  shiftGraceMinutes.value = 0
+  shiftActiveDays.value = []
   isShiftModalOpen.value = true
 }
 
@@ -88,6 +89,10 @@ const openEditShiftModal = (s: Shift) => {
 const handleSaveShift = async () => {
   if (!shiftName.value.trim()) {
     showNotification('Shift name is required')
+    return
+  }
+  if (!shiftStartTime.value.trim() || !shiftEndTime.value.trim()) {
+    showNotification('Start and end times are required')
     return
   }
   if (shiftActiveDays.value.length === 0) {
@@ -158,63 +163,32 @@ const myRecordToday = computed(() => {
   )
 })
 
+// The signed-in employee's assigned shift (from their employee record + shift templates).
+const myShift = computed(() => {
+  const me = (employees.value || []).find((e) => e.id === currentUserId.value)
+  const name = me?.shift
+  if (!name) return null
+  return (shifts.value || []).find((s) => s.name === name) || { name, startTime: '', endTime: '' }
+})
+
 const handleClockAction = async () => {
-  await recordAttendance({
+  if (!hasEmployeeProfile.value) {
+    showNotification(noProfileHint)
+    return
+  }
+  const wasCheckedIn = Boolean(myRecordToday.value && !myRecordToday.value.checkOut)
+  const { error } = await recordAttendance({
     employeeId: currentUserId.value,
     employeeName: currentUserName.value,
   })
-  showNotification(
-    myRecordToday.value && !myRecordToday.value.checkOut
-      ? 'Checked out successfully! Shift recorded.'
-      : 'Checked in successfully! Shift started.'
-  )
+  if (error) {
+    showNotification(error?.data || 'Could not record attendance')
+    return
+  }
+  showNotification(wasCheckedIn ? 'Checked out successfully! Shift recorded.' : 'Checked in successfully! Shift started.')
 }
 
-// Role-Based Attendance Scoping:
-// Super Admin sees all company logs; Manager sees department/team logs; Employee sees personal logs only.
-const scopedAttendance = computed(() => {
-  const all = attendance.value || []
-  if (isSuperAdmin.value) return all
 
-  if (isDepartmentManager.value) {
-    const dept = (currentUser.value?.department || '').toLowerCase()
-    const managerName = (currentUser.value?.name || '').toLowerCase()
-    const myId = currentUserId.value
-
-    const teamEmployees = (employees.value || []).filter(
-      (e) =>
-        e.id === myId ||
-        (dept && (e.department || '').toLowerCase() === dept) ||
-        (managerName && (e.reportingManagerName || '').toLowerCase() === managerName)
-    )
-    const teamEmpIds = new Set(teamEmployees.map((e) => e.id))
-    const teamNames = new Set(teamEmployees.map((e) => `${e.firstName || ''} ${e.lastName || ''}`.trim().toLowerCase()))
-
-    return all.filter(
-      (a) =>
-        teamEmpIds.has(a.employeeId) ||
-        teamNames.has((a.employeeName || '').trim().toLowerCase()) ||
-        a.employeeId === myId
-    )
-  }
-
-  // General Employee: ONLY show their own attendance log
-  const myId = currentUserId.value
-  const myName = (currentUserName.value || '').trim().toLowerCase()
-  const userEmail = (currentUser.value?.email || '').toLowerCase()
-  const emailPrefix = userEmail.split('@')[0] || ''
-
-  return all.filter(
-    (a) =>
-      a.employeeId === myId ||
-      (a.employeeName || '').trim().toLowerCase() === myName ||
-      (emailPrefix && (a.employeeName || '').toLowerCase().includes(emailPrefix))
-  )
-})
-
-// Summary Metrics
-const presentCount = computed(() => scopedAttendance.value.filter((a) => a.date === todayStr && a.status === 'Present').length)
-const lateCount = computed(() => scopedAttendance.value.filter((a) => a.date === todayStr && a.status === 'Late').length)
 </script>
 
 <template>
@@ -226,7 +200,7 @@ const lateCount = computed(() => scopedAttendance.value.filter((a) => a.date ===
           Time & Attendance
         </h1>
         <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">
-          Monitor daily clock-ins, multi-shift rosters, and biometric attendance records
+          Monitor daily clock-ins, shift rosters, and attendance records
         </p>
       </div>
     </div>
@@ -260,7 +234,7 @@ const lateCount = computed(() => scopedAttendance.value.filter((a) => a.date ===
 
         <div class="pt-4 border-t border-slate-100 dark:border-slate-800 mt-6">
           <p class="text-xs text-slate-500 dark:text-slate-400">
-            Assigned Shift: <span class="font-bold text-slate-800 dark:text-slate-200">General Day (09:00 AM – 06:00 PM)</span>
+            Assigned Shift: <span class="font-bold text-slate-800 dark:text-slate-200">{{ myShift ? (myShift.startTime ? `${myShift.name} (${myShift.startTime} – ${myShift.endTime})` : myShift.name) : '—' }}</span>
           </p>
         </div>
       </div>
@@ -278,7 +252,7 @@ const lateCount = computed(() => scopedAttendance.value.filter((a) => a.date ===
               {{ myRecordToday ? (myRecordToday.checkOut ? 'Shift Completed' : 'Clocked In') : 'Awaiting Check-in' }}
             </h2>
             <p class="text-xs text-sky-100 mt-1">
-              Signed in as <span class="font-semibold text-white">{{ currentUserName }}</span> ({{ currentUserRole }})
+              Signed in as <span class="font-semibold text-white">{{ currentUserName || '—' }}</span> ({{ currentUserRole }})
             </p>
           </div>
 
@@ -292,12 +266,12 @@ const lateCount = computed(() => scopedAttendance.value.filter((a) => a.date ===
 
         <div class="pt-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4 relative">
           <p class="text-xs text-sky-200/80">
-            Synchronized with biometric devices and corporate IP geolocation.
+            <template v-if="!hasEmployeeProfile">{{ noProfileHint }}</template>
           </p>
 
           <button
             @click="handleClockAction"
-            :disabled="isPunching || (myRecordToday && !!myRecordToday.checkOut)"
+            :disabled="!hasEmployeeProfile || isPunching || (myRecordToday && !!myRecordToday.checkOut)"
             class="px-6 py-2.5 rounded-xl bg-[#1989d9] hover:bg-[#0e6db3] text-white font-bold text-xs shadow-lg shadow-[#1989d9]/30 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed self-start sm:self-auto cursor-pointer"
           >
             <span v-if="isPunching">Syncing...</span>
@@ -321,12 +295,12 @@ const lateCount = computed(() => scopedAttendance.value.filter((a) => a.date ===
         ]"
       >
         <Clock class="w-4 h-4" />
-        <span>Daily Attendance Logs ({{ scopedAttendance?.length || 0 }})</span>
+        <span>{{ canViewAll ? 'Department Register' : 'My Attendance Calendar' }}</span>
       </button>
 
       <!-- Shift Templates: Only Admin can see -->
       <button
-        v-if="isSuperAdmin"
+        v-if="canViewAll"
         @click="activeTab = 'shifts'"
         :class="[
           'px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer',
@@ -340,89 +314,17 @@ const lateCount = computed(() => scopedAttendance.value.filter((a) => a.date ===
       </button>
     </div>
 
-    <!-- TAB 1: DAILY ATTENDANCE LOGS -->
-    <div v-if="activeTab === 'daily'" class="rounded-3xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xs overflow-hidden">
-      <div class="p-6 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
-        <div>
-          <h2 class="text-base font-bold text-slate-900 dark:text-white">Daily Attendance Register</h2>
-          <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-            {{ isSuperAdmin ? 'All organization records for ' + todayStr : isDepartmentManager ? 'Department team records for ' + todayStr : 'Your personal attendance records for ' + todayStr }}
-          </p>
-        </div>
-        <div class="flex items-center gap-2">
-          <span class="text-xs font-semibold px-2.5 py-1 rounded-md bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400">
-            {{ presentCount }} Present
-          </span>
-          <span class="text-xs font-semibold px-2.5 py-1 rounded-md bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400">
-            {{ lateCount }} Late
-          </span>
-        </div>
-      </div>
-
-      <div class="overflow-x-auto">
-        <table class="w-full text-left border-collapse">
-          <thead>
-            <tr class="border-b border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-              <th class="py-3.5 px-6">Employee</th>
-              <th class="py-3.5 px-6">Shift Template</th>
-              <th class="py-3.5 px-6">Clock In</th>
-              <th class="py-3.5 px-6">Clock Out</th>
-              <th class="py-3.5 px-6">Work Hours</th>
-              <th class="py-3.5 px-6">Overtime</th>
-              <th class="py-3.5 px-6 text-right">Status</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-slate-100 dark:divide-slate-800/80 text-sm">
-            <tr v-if="scopedAttendance.length === 0">
-              <td colspan="7" class="py-12 text-center text-slate-400 text-xs">
-                No attendance logs found for your profile today.
-              </td>
-            </tr>
-            <tr
-              v-for="record in scopedAttendance"
-              :key="record.id"
-              class="hover:bg-slate-50/60 dark:hover:bg-slate-800/40 transition-colors"
-            >
-              <td class="py-4 px-6 font-semibold text-slate-900 dark:text-white text-xs">
-                {{ record.employeeName }}
-              </td>
-              <td class="py-4 px-6 text-xs text-slate-500 dark:text-slate-400">
-                {{ record.shift || 'General Day Shift' }}
-              </td>
-              <td class="py-4 px-6 text-xs font-medium text-slate-800 dark:text-slate-200 font-mono">
-                {{ record.checkIn }}
-              </td>
-              <td class="py-4 px-6 text-xs text-slate-500 dark:text-slate-400 font-mono">
-                {{ record.checkOut || 'Active' }}
-              </td>
-              <td class="py-4 px-6 text-xs text-slate-600 dark:text-slate-300 font-mono">
-                {{ record.workHours ? `${record.workHours} hrs` : 'In progress' }}
-              </td>
-              <td class="py-4 px-6 text-xs font-mono font-medium text-[#0e6db3] dark:text-[#38a5e4]">
-                {{ record.overtimeHours ? `+${record.overtimeHours} hrs` : '—' }}
-              </td>
-              <td class="py-4 px-6 text-right">
-                <span
-                  :class="[
-                    'px-2.5 py-1 rounded-md text-xs font-semibold',
-                    record.status === 'Present'
-                      ? 'bg-emerald-50 dark:bg-emerald-950/50 text-emerald-600 dark:text-emerald-400'
-                      : record.status === 'Late'
-                      ? 'bg-amber-50 dark:bg-amber-950/50 text-amber-600 dark:text-amber-400'
-                      : 'bg-rose-50 dark:bg-rose-950/50 text-rose-600 dark:text-rose-400'
-                  ]"
-                >
-                  {{ record.status }}
-                </span>
-              </td>
-            </tr>
-          </tbody>
-        </table>
+    <!-- TAB 1: Super Admin / HR see a department-wise register; everyone else sees their own calendar -->
+    <div v-if="activeTab === 'daily'">
+      <DepartmentAttendanceRegister v-if="canViewAll" />
+      <AttendanceCalendar v-else-if="hasEmployeeProfile" />
+      <div v-else class="p-10 rounded-3xl border border-dashed border-slate-300 dark:border-slate-700 text-center text-sm text-slate-500">
+        {{ noProfileHint }}
       </div>
     </div>
 
     <!-- TAB 2: SHIFT TEMPLATES (DYNAMIC CRUD) - Admin Only -->
-    <div v-if="activeTab === 'shifts' && isSuperAdmin" class="space-y-6">
+    <div v-if="activeTab === 'shifts' && canViewAll" class="space-y-6">
       <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xs">
         <div>
           <h2 class="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
@@ -434,7 +336,7 @@ const lateCount = computed(() => scopedAttendance.value.filter((a) => a.date ===
           </p>
         </div>
         <button
-          v-if="isSuperAdmin"
+          v-if="can('attendance', 'create')"
           @click="openAddShiftModal"
           class="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-[#044663] to-[#1989d9] hover:from-[#065578] hover:to-[#2298ea] text-white font-bold text-xs shadow-md shadow-[#1989d9]/20 active:scale-95 transition-all cursor-pointer"
         >
@@ -460,7 +362,7 @@ const lateCount = computed(() => scopedAttendance.value.filter((a) => a.date ===
                 </span>
                 <!-- Edit & Delete Shift Actions -->
                 <button
-                  v-if="isSuperAdmin"
+                  v-if="can('attendance', 'edit')"
                   @click="openEditShiftModal(shift)"
                   title="Edit Shift"
                   class="p-1.5 rounded-lg text-slate-400 hover:text-[#1989d9] hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
@@ -468,7 +370,7 @@ const lateCount = computed(() => scopedAttendance.value.filter((a) => a.date ===
                   <Pencil class="w-3.5 h-3.5" />
                 </button>
                 <button
-                  v-if="isSuperAdmin"
+                  v-if="can('attendance', 'delete')"
                   @click="handleDeleteShift(shift)"
                   title="Delete Shift"
                   class="p-1.5 rounded-lg text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer"

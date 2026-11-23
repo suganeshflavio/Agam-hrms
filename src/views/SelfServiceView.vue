@@ -3,6 +3,7 @@ import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useForm } from 'vee-validate'
 import { toTypedSchema } from '@vee-validate/zod'
+import { z } from 'zod'
 import {
   UserCheck,
   Calendar,
@@ -26,8 +27,8 @@ import {
 } from '@lucide/vue'
 import { hrmsApi } from '@/redux/api/hrmsApi'
 import { useApiQuery, useApiMutation, useAppSelector } from '@/redux/vueAdapter'
-import { leaveSchema, type LeaveFormValues } from '@/schemas/leaveSchema'
-import type { Employee, LeaveRequest, Payslip, AttendanceRecord } from '@/types/hrms'
+import type { Employee, LeaveRequest, Payslip, AttendanceRecord, LeaveBalance, LeaveTypePolicy } from '@/types/hrms'
+import { useMoney } from '@/composables/useMoney'
 import FormInput from '@/components/forms/FormInput.vue'
 import FormSelect from '@/components/forms/FormSelect.vue'
 import FormTextarea from '@/components/forms/FormTextarea.vue'
@@ -35,15 +36,20 @@ import AppLogo from '@/components/common/AppLogo.vue'
 
 const router = useRouter()
 const currentUser = useAppSelector((state) => state.auth.user)
-const currentUserId = computed(() => currentUser.value?.id || 'emp-1')
-const currentUserName = computed(() => currentUser.value?.name || 'Sarah Connor')
-const currentUserRole = computed(() => currentUser.value?.role || 'Super Admin')
+// The signed-in user's employee record (none for admin-only logins).
+const currentUserId = computed(() => currentUser.value?.employeeId || '')
+const currentUserName = computed(() => currentUser.value?.name || '')
+const hasEmployeeProfile = computed(() => !!currentUserId.value)
+const NO_PROFILE_MESSAGE = "Your login isn't linked to an employee profile."
 
 // Redux Queries & Mutations
 const { data: employees } = useApiQuery<Employee[]>(hrmsApi.endpoints.getEmployees)
 const { data: leaves } = useApiQuery<LeaveRequest[]>(hrmsApi.endpoints.getLeaveRequests)
 const { data: payslips } = useApiQuery<Payslip[]>(hrmsApi.endpoints.getPayslips)
 const { data: attendance } = useApiQuery<AttendanceRecord[]>(hrmsApi.endpoints.getAttendance)
+const { data: leaveBalances } = useApiQuery<LeaveBalance[]>(hrmsApi.endpoints.getLeaveBalances)
+const { data: leavePolicies } = useApiQuery<LeaveTypePolicy[]>(hrmsApi.endpoints.getLeavePolicies)
+const { company, formatMoney } = useMoney()
 
 const [recordAttendance, { isLoading: isPunching }] = useApiMutation(hrmsApi.endpoints.recordAttendance)
 const [applyLeave, { isLoading: isApplyingLeave }] = useApiMutation(hrmsApi.endpoints.applyLeave)
@@ -68,46 +74,95 @@ const handlePrint = () => {
 
 // Current User's Specific Records
 const myEmployeeProfile = computed(() => {
-  return (employees.value || []).find((e) => e.id === currentUserId.value) || (employees.value || [])[0]
+  if (!currentUserId.value) return undefined
+  return (employees.value || []).find((e) => e.id === currentUserId.value)
+})
+
+const myManager = computed(() => {
+  const managerId = myEmployeeProfile.value?.reportingManagerId
+  return managerId ? (employees.value || []).find((e) => e.id === managerId) : undefined
+})
+
+const maskedAccount = computed(() => {
+  const number = myEmployeeProfile.value?.bankDetails?.accountNumber || ''
+  const digits = number.replace(/\D/g, '')
+  return digits ? `•••• ${digits.slice(-4)}` : number
 })
 
 const myLeaves = computed(() => {
   return (leaves.value || []).filter((l) => l.employeeId === currentUserId.value)
 })
 
+// Own payslips only (matched by employee id), latest first.
+const payslipSortKey = (p: Payslip) => p.paymentDate || (Date.parse(`1 ${p.monthYear}`) ? new Date(`1 ${p.monthYear}`).toISOString() : '')
 const myPayslips = computed(() => {
-  return (payslips.value || []).filter(
-    (p) => p.employeeId === currentUserId.value || p.employeeName.toLowerCase().includes(currentUserName.value.toLowerCase().split(' ')[0] || '')
-  )
+  if (!currentUserId.value) return []
+  return (payslips.value || [])
+    .filter((p) => p.employeeId === currentUserId.value)
+    .slice()
+    .sort((a, b) => payslipSortKey(b).localeCompare(payslipSortKey(a)))
 })
 
 const myAttendance = computed(() => {
+  if (!currentUserId.value) return []
   return (attendance.value || []).filter((a) => a.employeeId === currentUserId.value)
 })
 
 const todayStr = new Date().toISOString().split('T')[0] ?? ''
 const myAttendanceToday = computed(() => {
+  if (!currentUserId.value) return undefined
   return (attendance.value || []).find((a) => a.employeeId === currentUserId.value && a.date === todayStr)
 })
 
+const currentShift = computed(() => myAttendanceToday.value?.shift || myEmployeeProfile.value?.shift || '—')
+
 const handlePunch = async () => {
-  await recordAttendance({
+  if (!hasEmployeeProfile.value) {
+    showNotification(NO_PROFILE_MESSAGE)
+    return
+  }
+  const wasCheckedIn = Boolean(myAttendanceToday.value && !myAttendanceToday.value.checkOut)
+  const { error } = await recordAttendance({
     employeeId: currentUserId.value,
     employeeName: currentUserName.value,
   })
-  showNotification(
-    myAttendanceToday.value && !myAttendanceToday.value.checkOut
-      ? 'Checked out for the day!'
-      : 'Clocked in successfully!'
-  )
+  if (error) {
+    showNotification(error?.data || 'Could not record attendance')
+    return
+  }
+  showNotification(wasCheckedIn ? 'Checked out for the day!' : 'Clocked in successfully!')
+}
+
+
+// Leave types come from the company's leave policies.
+const leaveTypeOptions = computed(() => (leavePolicies.value || []).map((p) => ({ value: p.name, label: p.name })))
+
+const openLeaveModal = () => {
+  if (!hasEmployeeProfile.value) {
+    showNotification(NO_PROFILE_MESSAGE)
+    return
+  }
+  isLeaveModalOpen.value = true
 }
 
 // Leave Application Form (VeeValidate + Zod)
-const { handleSubmit, resetForm } = useForm<LeaveFormValues>({
-  validationSchema: toTypedSchema(leaveSchema),
+const selfLeaveSchema = z
+  .object({
+    leaveType: z.string().min(1, 'Please select a leave type'),
+    startDate: z.string().min(1, 'Start date is required'),
+    endDate: z.string().min(1, 'End date is required'),
+    reason: z.string().min(8, 'Reason must be at least 8 characters explaining the leave'),
+  })
+  .refine((data) => new Date(data.endDate) >= new Date(data.startDate), {
+    message: 'End date cannot be earlier than start date',
+    path: ['endDate'],
+  })
+type SelfLeaveValues = z.infer<typeof selfLeaveSchema>
+
+const { handleSubmit, resetForm } = useForm<SelfLeaveValues>({
+  validationSchema: toTypedSchema(selfLeaveSchema),
   initialValues: {
-    employeeId: currentUserId.value,
-    leaveType: 'Annual',
+    leaveType: '',
     startDate: todayStr,
     endDate: todayStr,
     reason: '',
@@ -115,30 +170,36 @@ const { handleSubmit, resetForm } = useForm<LeaveFormValues>({
 })
 
 const onLeaveSubmit = handleSubmit(async (values) => {
+  if (!hasEmployeeProfile.value || !myEmployeeProfile.value) {
+    showNotification(NO_PROFILE_MESSAGE)
+    return
+  }
   const start = new Date(values.startDate)
   const end = new Date(values.endDate)
   const diffTime = Math.abs(end.getTime() - start.getTime())
   const days = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1
 
-  await applyLeave({
+  const { error } = await applyLeave({
     employeeId: currentUserId.value,
     employeeName: currentUserName.value,
-    department: myEmployeeProfile.value ? myEmployeeProfile.value.department : 'Engineering',
-    leaveType: values.leaveType,
+    department: myEmployeeProfile.value.department,
+    leaveType: values.leaveType as LeaveRequest['leaveType'],
     startDate: values.startDate,
     endDate: values.endDate,
     daysCount: days,
     reason: values.reason,
   })
+  if (error) {
+    showNotification(error?.data || 'The leave request could not be submitted')
+    return
+  }
 
-  showNotification('Leave application submitted to your manager!')
+  showNotification('Leave application submitted for approval.')
   resetForm()
   isLeaveModalOpen.value = false
 })
 
-const formatCurrency = (val: number) => {
-  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(val)
-}
+const formatCurrency = (val: number) => formatMoney(val)
 </script>
 
 <template>
@@ -149,18 +210,19 @@ const formatCurrency = (val: number) => {
 
       <div class="flex items-center gap-4 relative">
         <div class="w-16 h-16 rounded-2xl bg-white/20 backdrop-blur-md flex items-center justify-center font-black text-2xl border border-white/20 shadow-md">
-          {{ (currentUserName || 'User').split(' ').filter(Boolean).map(n => n[0]).join('') }}
+          {{ currentUserName.split(' ').filter(Boolean).map(n => n[0]).join('') }}
         </div>
         <div>
           <div class="flex flex-wrap items-center gap-2">
             <h1 class="text-2xl font-black">{{ currentUserName }}</h1>
             <span class="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-white/20 uppercase tracking-wider">
-              {{ myEmployeeProfile?.status || 'Active' }}
+              {{ myEmployeeProfile?.status || '—' }}
             </span>
           </div>
-          <p class="text-xs text-indigo-100 mt-1">
-            {{ myEmployeeProfile?.designation }} • {{ myEmployeeProfile?.department }} • Code: <span class="font-bold">{{ myEmployeeProfile?.employeeCode }}</span>
+          <p v-if="myEmployeeProfile" class="text-xs text-indigo-100 mt-1">
+            {{ myEmployeeProfile.designation }} • {{ myEmployeeProfile.department }} • Code: <span class="font-bold">{{ myEmployeeProfile.employeeCode }}</span>
           </p>
+          <p v-else class="text-xs text-indigo-100 mt-1">{{ NO_PROFILE_MESSAGE }}</p>
         </div>
       </div>
 
@@ -176,7 +238,8 @@ const formatCurrency = (val: number) => {
 
         <button
           @click="handlePunch"
-          :disabled="isPunching || (myAttendanceToday && !!myAttendanceToday.checkOut)"
+          :disabled="!hasEmployeeProfile || isPunching || (myAttendanceToday && !!myAttendanceToday.checkOut)"
+          :title="hasEmployeeProfile ? '' : NO_PROFILE_MESSAGE"
           class="px-5 py-2.5 rounded-xl bg-white text-indigo-700 hover:bg-indigo-50 font-bold text-xs shadow-md active:scale-95 transition-all disabled:opacity-50"
         >
           <span v-if="isPunching">Syncing...</span>
@@ -196,24 +259,27 @@ const formatCurrency = (val: number) => {
       <span>{{ notification }}</span>
     </div>
 
-    <!-- Quick Stats Grid -->
+    <!-- Leave balances (from the backend) -->
     <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-      <div class="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xs">
+      <div
+        v-for="balance in leaveBalances || []"
+        :key="balance.policyId"
+        class="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xs"
+      >
         <div class="flex items-center justify-between text-slate-400">
-          <span class="text-xs font-semibold">Annual Paid Leave</span>
+          <span class="text-xs font-semibold">{{ balance.leaveType }}</span>
           <Calendar class="w-4 h-4 text-indigo-500" />
         </div>
-        <p class="text-2xl font-black text-slate-900 dark:text-white mt-1">15 Days</p>
-        <p class="text-[10px] text-slate-400 mt-0.5">5 days taken this year</p>
+        <p class="text-2xl font-black text-slate-900 dark:text-white mt-1">{{ balance.available }} Days</p>
+        <p class="text-[10px] text-slate-400 mt-0.5">
+          {{ balance.used }} used of {{ balance.allocated }}<span v-if="balance.pending > 0"> • {{ balance.pending }} pending</span>
+        </p>
       </div>
-
-      <div class="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xs">
-        <div class="flex items-center justify-between text-slate-400">
-          <span class="text-xs font-semibold">Sick Leave</span>
-          <Clock class="w-4 h-4 text-emerald-500" />
-        </div>
-        <p class="text-2xl font-black text-emerald-600 dark:text-emerald-400 mt-1">10 Days</p>
-        <p class="text-[10px] text-slate-400 mt-0.5">2 days taken this year</p>
+      <div
+        v-if="hasEmployeeProfile && !(leaveBalances || []).length"
+        class="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xs text-xs text-slate-400 flex items-center"
+      >
+        No leave balances yet
       </div>
 
       <div class="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xs">
@@ -222,9 +288,11 @@ const formatCurrency = (val: number) => {
           <Banknote class="w-4 h-4 text-emerald-500" />
         </div>
         <p class="text-2xl font-black font-mono text-emerald-600 dark:text-emerald-400 mt-1">
-          {{ myPayslips.length ? formatCurrency(myPayslips[0]!.breakdown.netPay) : '$8,450' }}
+          {{ myPayslips.length ? formatCurrency(myPayslips[0]!.breakdown.netPay) : '—' }}
         </p>
-        <p class="text-[10px] text-slate-400 mt-0.5">Credited via Direct Deposit</p>
+        <p class="text-[10px] text-slate-400 mt-0.5">
+          {{ myPayslips.length ? `${myPayslips[0]!.monthYear} • ${myPayslips[0]!.paymentStatus}` : 'No payslips yet' }}
+        </p>
       </div>
 
       <div class="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xs">
@@ -233,9 +301,9 @@ const formatCurrency = (val: number) => {
           <CheckCircle2 class="w-4 h-4 text-purple-500" />
         </div>
         <p class="text-base font-extrabold text-slate-900 dark:text-white mt-2">
-          {{ myAttendanceToday ? (myAttendanceToday.checkOut ? 'Completed' : 'On Shift') : 'Awaiting Punch' }}
+          {{ !hasEmployeeProfile ? '—' : myAttendanceToday ? (myAttendanceToday.checkOut ? 'Completed' : 'On Shift') : 'Awaiting Punch' }}
         </p>
-        <p class="text-[10px] text-slate-400 mt-0.5">General Day Shift</p>
+        <p class="text-[10px] text-slate-400 mt-0.5">{{ currentShift }}</p>
       </div>
     </div>
 
@@ -301,47 +369,49 @@ const formatCurrency = (val: number) => {
         <div class="p-4 rounded-2xl bg-indigo-50/60 dark:bg-indigo-950/30 border border-indigo-100 dark:border-indigo-900/50">
           <span class="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400">Direct Manager</span>
           <p class="text-sm font-bold text-slate-900 dark:text-white mt-0.5">
-            {{ myEmployeeProfile?.reportingManagerName || 'Sarah Connor (VP of Engineering)' }}
+            {{ myEmployeeProfile?.reportingManagerName || 'Not assigned' }}
           </p>
-          <p class="text-xs text-slate-500 mt-0.5">manager@agam.internal</p>
+          <p v-if="myManager?.email" class="text-xs text-slate-500 mt-0.5">{{ myManager.email }}</p>
         </div>
 
         <div class="space-y-2 pt-2 text-xs">
           <div class="flex justify-between py-1 border-b border-slate-100 dark:border-slate-800">
             <span class="text-slate-500">Employment Type</span>
-            <span class="font-bold text-slate-800 dark:text-slate-200">{{ myEmployeeProfile?.employmentType }}</span>
+            <span class="font-bold text-slate-800 dark:text-slate-200">{{ myEmployeeProfile?.employmentType || '—' }}</span>
           </div>
           <div class="flex justify-between py-1 border-b border-slate-100 dark:border-slate-800">
             <span class="text-slate-500">Assigned Branch</span>
-            <span class="font-bold text-slate-800 dark:text-slate-200">{{ myEmployeeProfile?.branch || 'San Francisco HQ' }}</span>
+            <span class="font-bold text-slate-800 dark:text-slate-200">{{ myEmployeeProfile?.branch || '—' }}</span>
           </div>
           <div class="flex justify-between py-1">
             <span class="text-slate-500">Joining Date</span>
-            <span class="font-bold text-slate-800 dark:text-slate-200">{{ myEmployeeProfile?.joiningDate }}</span>
+            <span class="font-bold text-slate-800 dark:text-slate-200">{{ myEmployeeProfile?.joiningDate || '—' }}</span>
           </div>
         </div>
       </div>
 
       <div class="p-6 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xs space-y-4">
-        <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400">Direct Deposit & Healthcare</h3>
-        <div class="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/60 dark:border-slate-800 space-y-1">
-          <span class="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">Verified Direct Deposit</span>
-          <p class="text-xs font-bold text-slate-900 dark:text-white">JPMorgan Chase & Co.</p>
-          <p class="text-[11px] text-slate-400 font-mono">Account: •••••••• 4892 (Checking)</p>
+        <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400">Salary Account</h3>
+        <div
+          v-if="myEmployeeProfile?.bankDetails"
+          class="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/60 dark:border-slate-800 space-y-1"
+        >
+          <span class="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">Bank Account on File</span>
+          <p class="text-xs font-bold text-slate-900 dark:text-white">{{ myEmployeeProfile.bankDetails.bankName || '—' }}</p>
+          <p class="text-[11px] text-slate-400 font-mono">
+            Account: {{ maskedAccount || '—' }}<span v-if="myEmployeeProfile.bankDetails.accountType"> ({{ myEmployeeProfile.bankDetails.accountType }})</span>
+          </p>
         </div>
-
-        <div class="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/60 dark:border-slate-800 space-y-1">
-          <span class="text-[11px] font-semibold text-purple-600 dark:text-purple-400">Cigna Global Healthcare</span>
-          <p class="text-xs font-bold text-slate-900 dark:text-white">Comprehensive PPO Policy</p>
-          <p class="text-[11px] text-slate-400">Member ID: AGM-INS-88231</p>
-        </div>
+        <p v-else class="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/60 dark:border-slate-800 text-xs text-slate-400">
+          No bank details on file
+        </p>
       </div>
 
       <div class="p-6 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xs space-y-4">
         <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400">Quick Actions</h3>
         <div class="space-y-2.5">
           <button
-            @click="isLeaveModalOpen = true"
+            @click="openLeaveModal"
             class="w-full text-left p-3.5 rounded-2xl bg-indigo-50/60 dark:bg-indigo-950/20 hover:bg-indigo-100/60 border border-indigo-100 dark:border-indigo-900/40 transition-colors flex items-center justify-between"
           >
             <div>
@@ -385,7 +455,7 @@ const formatCurrency = (val: number) => {
           <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">History of submitted vacation and casual leave requests</p>
         </div>
         <button
-          @click="isLeaveModalOpen = true"
+          @click="openLeaveModal"
           class="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs shadow-md shadow-indigo-600/20 transition-all"
         >
           <CalendarPlus class="w-4 h-4" />
@@ -584,7 +654,7 @@ const formatCurrency = (val: number) => {
         <div class="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-800">
           <div>
             <h2 class="text-lg font-bold text-slate-900 dark:text-white">Apply for Time Off</h2>
-            <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Submit request to your direct reporting manager</p>
+            <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Submitted for approval through your company's leave workflow</p>
           </div>
           <button
             @click="isLeaveModalOpen = false"
@@ -598,13 +668,7 @@ const formatCurrency = (val: number) => {
           <FormSelect
             name="leaveType"
             label="Leave Type"
-            :options="[
-              { value: 'Annual', label: 'Annual / Paid Leave' },
-              { value: 'Sick', label: 'Sick / Medical Leave' },
-              { value: 'Casual', label: 'Casual Leave' },
-              { value: 'Maternity/Paternity', label: 'Maternity / Paternity Leave' },
-              { value: 'Unpaid', label: 'Unpaid Leave' },
-            ]"
+            :options="leaveTypeOptions"
             required
           />
 
@@ -674,7 +738,8 @@ const formatCurrency = (val: number) => {
               <div class="flex items-center gap-2">
                 <AppLogo variant="full" className="h-8 w-auto max-w-[170px]" />
               </div>
-              <p class="text-[11px] text-slate-500 mt-2">100 Market St, Suite 400 • San Francisco, CA</p>
+              <p class="text-[11px] font-semibold text-slate-700 dark:text-slate-300 mt-2">{{ company?.legalName || company?.name || '—' }}</p>
+              <p v-if="company?.headquarters" class="text-[11px] text-slate-500">{{ company.headquarters }}</p>
             </div>
             <div class="text-right">
               <span class="text-xs font-bold uppercase tracking-wider text-slate-400">Statement</span>
@@ -728,7 +793,7 @@ const formatCurrency = (val: number) => {
               </p>
             </div>
             <span class="px-3 py-1 rounded-full text-xs font-bold bg-emerald-600 text-white shadow-xs">
-              CREDITED (ACH)
+              {{ selectedPayslip.paymentStatus }}
             </span>
           </div>
         </div>

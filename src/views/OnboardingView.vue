@@ -25,17 +25,19 @@ import {
   GitBranch,
 } from '@lucide/vue'
 import { hrmsApi } from '@/redux/api/hrmsApi'
-import { useApiQuery, useApiMutation, useAppSelector } from '@/redux/vueAdapter'
+import { useApiQuery, useApiMutation } from '@/redux/vueAdapter'
 import type { OnboardingCandidate, Department, Grade, RolePermission, ApprovalWorkflow, EmployeeDocument, Shift, Employee } from '@/types/hrms'
 import FormInput from '@/components/forms/FormInput.vue'
 import FormSelect from '@/components/forms/FormSelect.vue'
+import { useMoney } from '@/composables/useMoney'
+import { usePermissions } from '@/composables/usePermissions'
+import type { ApiError } from '@/services/apiClient'
 
 const router = useRouter()
-const currentUser = useAppSelector((state) => state.auth.user)
-const isSuperAdmin = computed(() => {
-  const r = (currentUser.value?.role || '').toLowerCase()
-  return !r || r.includes('admin') || r.includes('hr') || r === 'super admin' || r === 'hr manager'
-})
+// Access follows HR Administration -> Roles & Permissions ("Employee Onboarding" row).
+const { can } = usePermissions()
+const canCreateCandidates = computed(() => can('employees', 'create'))
+const canEditCandidates = computed(() => can('employees', 'edit'))
 
 // Redux API Queries & Mutations
 const { data: candidates, isLoading } = useApiQuery<OnboardingCandidate[]>(
@@ -59,19 +61,22 @@ const selectedFilter = ref<'All' | 'In Progress' | 'Completed'>('All')
 const feedbackMessage = ref('')
 const newlyCreatedEmployee = ref<{ id: string; name: string } | null>(null)
 
-// Super Admin Onboarding Conversion Modal State
+// Onboarding Conversion Modal State
 const isOnboardingConversionModalOpen = ref(false)
 const selectedCandidate = ref<OnboardingCandidate | null>(null)
-const conversionRole = ref('General Employee')
-const conversionShift = ref('General Day Shift')
-const conversionManager = ref('Sarah Connor')
-const conversionGrade = ref('Professional / Lead (P1-P3)')
-const conversionWorkflow = ref('Standard 2-Tier Leave & Expense Approval')
-const conversionSalary = ref(105000)
-const uploadedCandidateDocs = ref<Array<{ title: string; category: 'ID Proof' | 'Educational' | 'Contract' | 'Tax'; fileSize: string }>>([
-  { title: 'National_ID_Passport.pdf', category: 'ID Proof', fileSize: '2.1 MB' },
-  { title: 'Signed_Employment_Agreement.pdf', category: 'Contract', fileSize: '1.4 MB' },
-])
+const conversionRole = ref('')
+const conversionShift = ref('')
+const conversionManager = ref('')
+const conversionGrade = ref('')
+const conversionWorkflow = ref('')
+const conversionSalary = ref<number | null>(null)
+const uploadedCandidateDocs = ref<Array<{ title: string; category: EmployeeDocument['category']; fileSize?: string }>>([])
+const { formatMoney, currencySymbol } = useMoney()
+// Access roles: the company's roles from the backend, plus the default employee role.
+const roleOptions = computed(() => {
+  const names = (roles.value || []).map((r) => r.roleName)
+  return names.includes('General Employee') ? names : ['General Employee', ...names]
+})
 
 const showFeedback = (msg: string) => {
   feedbackMessage.value = msg
@@ -98,15 +103,15 @@ const { handleSubmit, resetForm } = useForm<PreboardFormValues>({
     candidateName: '',
     email: '',
     jobTitle: '',
-    department: 'Engineering',
+    department: '',
     joiningDate: new Date().toISOString().split('T')[0],
-    assignedBuddy: 'Sarah Connor',
+    assignedBuddy: '',
   },
 })
 
 const onPreboardSubmit = handleSubmit(async (values) => {
-  if (!isSuperAdmin.value) {
-    showFeedback('Access Denied: Only Super Admin can initiate onboarding records.')
+  if (!canCreateCandidates.value) {
+    showFeedback("You don't have permission to add candidates (Roles & Permissions).")
     return
   }
   await addOnboardingCandidate(values)
@@ -116,40 +121,37 @@ const onPreboardSubmit = handleSubmit(async (values) => {
 })
 
 const handleTaskToggle = async (candidateId: string, taskId: string) => {
-  if (!isSuperAdmin.value) {
-    showFeedback('Access Denied: Only Super Admin can mark checklist tasks completed.')
+  if (!canEditCandidates.value) {
+    showFeedback("You don't have permission to update onboarding checklists (Roles & Permissions).")
     return
   }
   await toggleTask({ candidateId, taskId })
 }
 
-// Open Super Admin Conversion Modal
+// Open Conversion Modal
 const openConversionModal = (cand: OnboardingCandidate) => {
-  if (!isSuperAdmin.value) {
-    showFeedback('Access Denied: Only Super Admin has authorization to upload documents, assign roles, and onboard active employees.')
+  if (!canCreateCandidates.value) {
+    showFeedback("You don't have permission to onboard employees (Roles & Permissions).")
     return
   }
   selectedCandidate.value = cand
   conversionRole.value = cand.assignedRole || 'General Employee'
-  conversionShift.value = cand.shiftTiming || (shifts.value?.[0]?.name || 'General Day Shift')
-  conversionManager.value = cand.reportingManager || cand.assignedBuddy || (employees.value?.[0]?.firstName ? `${employees.value[0].firstName} ${employees.value[0].lastName}` : 'Sarah Connor')
-  conversionGrade.value = cand.salaryGrade || 'Professional / Lead (P1-P3)'
-  conversionWorkflow.value = cand.approvalWorkflow || 'Standard 2-Tier Leave & Expense Approval'
-  conversionSalary.value = cand.salary || 105000
+  conversionShift.value = cand.shiftTiming || ''
+  conversionManager.value = cand.reportingManager || ''
+  conversionGrade.value = cand.salaryGrade || ''
+  conversionWorkflow.value = cand.approvalWorkflow || ''
+  conversionSalary.value = cand.salary ?? null
+  uploadedCandidateDocs.value = (cand.uploadedDocuments || []).map((d) => ({ title: d.title, category: d.category, fileSize: d.fileSize }))
   isOnboardingConversionModalOpen.value = true
 }
 
-// Add simulated document upload
+// Documents to record against the new employee (sent for verification as Pending)
 const newDocTitle = ref('')
-const newDocCategory = ref<'ID Proof' | 'Educational' | 'Contract' | 'Tax'>('Educational')
+const newDocCategory = ref<EmployeeDocument['category']>('Educational')
 
 const handleAddDocument = () => {
-  if (!newDocTitle.value) return
-  uploadedCandidateDocs.value.push({
-    title: newDocTitle.value.endsWith('.pdf') ? newDocTitle.value : `${newDocTitle.value}.pdf`,
-    category: newDocCategory.value,
-    fileSize: '1.8 MB',
-  })
+  if (!newDocTitle.value.trim()) return
+  uploadedCandidateDocs.value.push({ title: newDocTitle.value.trim(), category: newDocCategory.value })
   newDocTitle.value = ''
 }
 
@@ -157,19 +159,18 @@ const handleRemoveDoc = (index: number) => {
   uploadedCandidateDocs.value.splice(index, 1)
 }
 
-// Super Admin Complete Onboarding
+// Complete Onboarding
 const handleCompleteOnboarding = async () => {
-  if (!selectedCandidate.value || !isSuperAdmin.value) return
+  if (!selectedCandidate.value || !canCreateCandidates.value) return
 
   try {
-    const formattedDocs: EmployeeDocument[] = uploadedCandidateDocs.value.map((d, i) => ({
-      id: `doc-${Date.now()}-${i}`,
+    // The backend assigns IDs and dates; documents start as Pending until HR verifies them.
+    const formattedDocs = uploadedCandidateDocs.value.map((d) => ({
       title: d.title,
       category: d.category,
-      uploadDate: new Date().toISOString().split('T')[0] ?? '',
-      fileSize: d.fileSize,
-      status: 'Verified',
-    }))
+      fileSize: d.fileSize || '',
+      status: 'Pending' as const,
+    })) as unknown as EmployeeDocument[]
 
     const res = await convertOnboardingCandidate({
       candidateId: selectedCandidate.value.id,
@@ -178,16 +179,20 @@ const handleCompleteOnboarding = async () => {
       reportingManagerName: conversionManager.value,
       grade: conversionGrade.value,
       approvalWorkflow: conversionWorkflow.value,
-      salary: conversionSalary.value,
+      salary: conversionSalary.value ?? undefined,
       documents: formattedDocs,
     })
 
+    if (res.error) {
+      showFeedback((res.error as ApiError)?.data || 'Failed to complete onboarding conversion')
+      return
+    }
     if (res.data) {
       newlyCreatedEmployee.value = {
         id: res.data.id,
         name: `${res.data.firstName} ${res.data.lastName}`,
       }
-      showFeedback(`Successfully onboarded ${selectedCandidate.value.candidateName} as Active Employee (${res.data.employeeCode}) under Manager "${conversionManager.value}" on "${conversionShift.value}"!`)
+      showFeedback(`Successfully onboarded ${selectedCandidate.value.candidateName} as Active Employee (${res.data.employeeCode})${conversionManager.value ? ` under ${conversionManager.value}` : ''}.`)
       isOnboardingConversionModalOpen.value = false
     }
   } catch (err: any) {
@@ -212,30 +217,30 @@ const filteredCandidates = computed(() => {
           Employee Onboarding
         </h1>
         <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">
-          Super Admin joining checklist, compliance document verification, role assignment, and active ID generation
+          Joining checklist, compliance document verification, role assignment, and active ID generation
         </p>
       </div>
 
       <div class="flex items-center gap-3">
-        <!-- Super Admin Indicator -->
+        <!-- Access Indicator -->
         <span
-          v-if="isSuperAdmin"
+          v-if="canCreateCandidates"
           class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 text-xs font-semibold"
         >
           <ShieldCheck class="w-3.5 h-3.5" />
-          <span>Super Admin Onboarding Access</span>
+          <span>Onboarding Access</span>
         </span>
         <span
           v-else
           class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-50 dark:bg-amber-950 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 text-xs font-semibold"
         >
           <Lock class="w-3.5 h-3.5" />
-          <span>View Only (Super Admin Restricted)</span>
+          <span>View Only</span>
         </span>
 
         <button
+          v-if="canCreateCandidates"
           @click="isModalOpen = true"
-          :disabled="!isSuperAdmin"
           class="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#1989d9] hover:bg-[#0e6db3] text-white font-semibold text-xs shadow-md shadow-[#1989d9]/25 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
         >
           <UserPlus class="w-4 h-4" />
@@ -326,7 +331,7 @@ const filteredCandidates = computed(() => {
                 <input
                   type="checkbox"
                   :checked="task.completed"
-                  :disabled="!isSuperAdmin"
+                  :disabled="!canEditCandidates"
                   @change="handleTaskToggle(cand.id, task.id)"
                   class="rounded border-slate-300 text-[#1989d9] focus:ring-[#1989d9] disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
                 />
@@ -339,16 +344,15 @@ const filteredCandidates = computed(() => {
           </div>
         </div>
 
-        <!-- Super Admin Conversion Button -->
+        <!-- Conversion Button -->
         <div class="pt-4 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
           <div class="text-xs text-slate-400">
             Assigned Buddy: <span class="font-semibold text-slate-700 dark:text-slate-200">{{ cand.assignedBuddy }}</span>
           </div>
 
           <button
-            v-if="cand.status !== 'Completed'"
+            v-if="cand.status !== 'Completed' && canCreateCandidates"
             @click="openConversionModal(cand)"
-            :disabled="!isSuperAdmin"
             class="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-md shadow-emerald-600/20 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
           >
             <ShieldCheck class="w-3.5 h-3.5" />
@@ -362,7 +366,7 @@ const filteredCandidates = computed(() => {
       </div>
     </div>
 
-    <!-- Modal 1: Super Admin Complete Onboarding & Role/Grade Assignment -->
+    <!-- Modal 1: Complete Onboarding & Role/Grade Assignment -->
     <div
       v-if="isOnboardingConversionModalOpen && selectedCandidate"
       class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-fadeIn"
@@ -371,7 +375,7 @@ const filteredCandidates = computed(() => {
         <div class="flex items-start justify-between pb-4 border-b border-slate-100 dark:border-slate-800">
           <div>
             <div class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold uppercase tracking-wider mb-1">
-              Super Admin Authorization
+              Onboarding Authorization
             </div>
             <h2 class="text-lg font-bold text-slate-900 dark:text-white">
               Onboard Active Employee: {{ selectedCandidate.candidateName }}
@@ -395,6 +399,7 @@ const filteredCandidates = computed(() => {
             </div>
 
             <!-- Uploaded docs list -->
+            <p v-if="!uploadedCandidateDocs.length" class="text-[11px] text-slate-400">No documents recorded for this candidate yet.</p>
             <div class="space-y-1.5">
               <div
                 v-for="(doc, idx) in uploadedCandidateDocs"
@@ -402,7 +407,7 @@ const filteredCandidates = computed(() => {
                 class="flex items-center justify-between p-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-200/80 dark:border-slate-700"
               >
                 <div class="flex items-center gap-2">
-                  <CheckCircle2 class="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                  <FileText class="w-3.5 h-3.5 text-slate-400 shrink-0" />
                   <span class="font-medium text-slate-800 dark:text-slate-200">{{ doc.title }}</span>
                   <span class="px-1.5 py-0.2 rounded bg-slate-100 dark:bg-slate-700 text-[10px] text-slate-500">{{ doc.category }}</span>
                 </div>
@@ -427,6 +432,7 @@ const filteredCandidates = computed(() => {
                 <option value="Educational">Educational</option>
                 <option value="Contract">Contract</option>
                 <option value="Tax">Tax Form</option>
+                <option value="Certification">Certification</option>
               </select>
               <button
                 type="button"
@@ -448,14 +454,7 @@ const filteredCandidates = computed(() => {
               v-model="conversionRole"
               class="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-semibold focus:outline-hidden"
             >
-              <option value="Super Admin">Super Admin (Full Organization Access)</option>
-              <option value="HR Manager">HR Manager</option>
-              <option value="Department Manager">Department Manager (Team Scoped View)</option>
-              <option value="Payroll Specialist">Payroll Specialist</option>
-              <option value="General Employee">General Employee (Self-Service ESS)</option>
-              <option v-for="r in (roles || []).filter(r => !['Super Admin', 'HR Manager', 'Department Manager', 'Payroll Specialist', 'General Employee'].includes(r.roleName))" :key="r.id" :value="r.roleName">
-                {{ r.roleName }} (Custom Role)
-              </option>
+              <option v-for="name in roleOptions" :key="name" :value="name">{{ name }}</option>
             </select>
           </div>
 
@@ -469,6 +468,7 @@ const filteredCandidates = computed(() => {
               v-model="conversionShift"
               class="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-semibold focus:outline-hidden"
             >
+              <option value="">Not assigned</option>
               <option v-for="sh in shifts" :key="sh.id" :value="sh.name">
                 {{ sh.name }} ({{ sh.startTime }} – {{ sh.endTime }})
               </option>
@@ -485,6 +485,7 @@ const filteredCandidates = computed(() => {
               v-model="conversionManager"
               class="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-semibold focus:outline-hidden"
             >
+              <option value="">Not assigned</option>
               <option
                 v-for="mgr in (employees || [])"
                 :key="mgr.id"
@@ -505,8 +506,9 @@ const filteredCandidates = computed(() => {
               v-model="conversionGrade"
               class="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-semibold focus:outline-hidden"
             >
+              <option value="">Not assigned</option>
               <option v-for="g in grades" :key="g.id" :value="g.name">
-                {{ g.name }} (Level {{ g.level }} • ${{ g.minSalary.toLocaleString() }} – ${{ g.maxSalary.toLocaleString() }})
+                {{ g.name }} (Level {{ g.level }} • {{ formatMoney(g.minSalary) }} – {{ formatMoney(g.maxSalary) }})
               </option>
             </select>
           </div>
@@ -521,6 +523,7 @@ const filteredCandidates = computed(() => {
               v-model="conversionWorkflow"
               class="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-semibold focus:outline-hidden"
             >
+              <option value="">Company default</option>
               <option v-for="wf in workflows" :key="wf.id" :value="wf.workflowName">
                 {{ wf.workflowName }} ({{ wf.module }} • {{ wf.levels.length }} Levels)
               </option>
@@ -530,11 +533,12 @@ const filteredCandidates = computed(() => {
           <!-- 5. Base Annual Compensation -->
           <div>
             <label class="block font-bold text-slate-800 dark:text-slate-200 mb-1">
-              Base Annual Salary (USD)
+              Base Annual Salary{{ currencySymbol ? ` (${currencySymbol})` : '' }}
             </label>
             <input
               type="number"
-              v-model="conversionSalary"
+              v-model.number="conversionSalary"
+              placeholder="Annual salary"
               class="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-mono font-bold focus:outline-hidden"
             />
           </div>
@@ -590,7 +594,7 @@ const filteredCandidates = computed(() => {
 
           <div class="grid grid-cols-2 gap-3">
             <FormInput name="joiningDate" type="date" label="Anticipated Joining Date" required />
-            <FormInput name="assignedBuddy" label="Onboarding Mentor" placeholder="e.g. Sarah Connor" required />
+            <FormInput name="assignedBuddy" label="Onboarding Mentor" placeholder="Mentor's full name" required />
           </div>
 
           <div class="flex items-center justify-end gap-3 pt-4 border-t border-slate-100 dark:border-slate-800">

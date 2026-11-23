@@ -1,9 +1,6 @@
 import type { AuthUser } from '@/types/auth'
 import { apiRequest, type ApiError } from '@/services/apiClient'
 
-/** Password shared by the seeded demo accounts (`bin/rails hrms:demo:agam`). */
-export const DEMO_PASSWORD: string = (import.meta.env.VITE_DEMO_PASSWORD as string | undefined) || 'Password@2026'
-
 export interface BackendSession {
   user: AuthUser
   token: string

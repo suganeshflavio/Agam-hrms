@@ -9,13 +9,13 @@ The UI talks to the Core HRMS Rails API (`../core_hrms`). All data access goes t
 # in ../core_hrms
 docker compose up -d && bin/rails db:prepare && bin/rails hrms:demo:agam && bin/rails server
 # here
-cp .env.example .env   # VITE_API_MODE=api, proxy to http://localhost:3000
+cp .env.example .env   # proxy target for the Rails API
 npm run dev
 ```
 
 Log in with `priya.sharma@agam.internal` / `Password@2026` (or the demo buttons).
 
-- `VITE_API_MODE=mock` runs the original localStorage demo without a backend (unit tests always use mock mode).
+- All data comes from the backend; there is no offline/mock mode.
 - Sessions refresh automatically; a 401 returns to the login screen.
 - The role switcher in the header only previews the UI — the backend enforces the user's real permissions.
 - Zoho sign-in: the code is exchanged by the backend (`ZOHO_CLIENT_SECRET` lives there). Do not put a client secret in `VITE_*` variables — they are bundled into the browser.

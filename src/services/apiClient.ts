@@ -1,15 +1,11 @@
 /**
  * HTTP client for the Core HRMS backend (core_hrms Rails API).
  *
- * - Base URL: VITE_API_BASE_URL (default `/api/v1`, proxied to Rails by Vite in development).
- * - Mock mode: VITE_API_MODE=mock (and the unit-test environment) keeps the original
- *   localStorage-backed services so the UI can run without a backend.
+ * Base URL: VITE_API_BASE_URL (default `/api/v1`, proxied to Rails by Vite in development).
+ * All application data comes from the backend.
  */
 
 export const API_BASE_URL: string = (import.meta.env.VITE_API_BASE_URL as string | undefined) || '/api/v1'
-
-export const isMockApi = (): boolean =>
-  import.meta.env.MODE === 'test' || import.meta.env.VITE_API_MODE === 'mock'
 
 const TOKEN_KEY = 'agam_auth_token'
 const EXPIRES_KEY = 'agam_auth_expires_at'
@@ -120,16 +116,12 @@ export async function apiRequest<T = any>(path: string, options: RequestOptions 
   return json.data as T
 }
 
-/**
- * Wraps an API call for RTK Query's queryFn: returns `{ data }` or `{ error }`.
- * In mock mode the original localStorage implementation runs instead.
- */
+/** Wraps an API call for RTK Query's queryFn: returns `{ data }` or `{ error }`. */
 export async function runQuery<T>(
   live: () => Promise<T>,
-  mock: () => T,
 ): Promise<{ data: T; error?: undefined } | { error: ApiError; data?: undefined }> {
   try {
-    return { data: isMockApi() ? mock() : await live() }
+    return { data: await live() }
   } catch (err: unknown) {
     if (err && typeof err === 'object' && 'status' in err) return { error: err as ApiError }
     return { error: { status: 500, data: err instanceof Error ? err.message : 'Unexpected error' } }

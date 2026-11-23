@@ -164,7 +164,7 @@ export interface Employee {
   esiNumber?: string
   hasLogin?: boolean
   loginPending?: boolean
-  account?: { created: boolean; email: string; emailSent: boolean } | null
+  account?: { created: boolean; linked?: boolean; email: string; emailSent: boolean; temporaryPassword?: string } | null
 }
 
 // ==========================================
@@ -260,6 +260,41 @@ export interface AttendanceRecord {
   source: 'Web Punch' | 'Biometric' | 'Mobile GPS'
 }
 
+export type AttendanceDayStatus =
+  | 'present' | 'late' | 'half_day' | 'absent' | 'on_leave' | 'holiday' | 'weekly_off' | 'not_marked' | 'upcoming'
+
+export interface AttendanceRegisterRow {
+  employeeId: string
+  employeeCode: string
+  employeeName: string
+  designation: string
+  department: string
+  status: AttendanceDayStatus
+  leaveType?: string
+  checkIn?: string
+  checkOut?: string
+  workHours?: number
+  shift?: string
+}
+
+export interface AttendanceRegister {
+  date: string
+  departments: {
+    department: string
+    total: number
+    present: number
+    counts: Partial<Record<AttendanceDayStatus, number>>
+    employees: AttendanceRegisterRow[]
+  }[]
+}
+
+export interface AttendanceCalendar {
+  month: string
+  employeeId: string
+  days: { date: string; status: AttendanceDayStatus; leaveType?: string; checkIn?: string; checkOut?: string; workHours?: number }[]
+  summary: Partial<Record<AttendanceDayStatus, number>>
+}
+
 export interface RegularizationRequest {
   id: string
   employeeId: string
@@ -271,6 +306,7 @@ export interface RegularizationRequest {
   correctedCheckOut?: string
   reason: string
   status: 'Pending' | 'Approved' | 'Rejected'
+  canAct?: boolean
 }
 
 // ==========================================
@@ -298,6 +334,20 @@ export interface Holiday {
   dayOfWeek?: string
 }
 
+export interface LeaveBalance {
+  policyId: string
+  leaveType: string
+  paid: boolean
+  year: number
+  allocated: number
+  accrued: number
+  carriedForward: number
+  adjusted: number
+  used: number
+  pending: number
+  available: number
+}
+
 export interface LeaveRequest {
   id: string
   employeeId: string
@@ -310,6 +360,8 @@ export interface LeaveRequest {
   reason: string
   status: 'Pending' | 'Approved' | 'Rejected'
   appliedOn: string
+  /** True when the signed-in user can approve/reject the current step. */
+  canAct?: boolean
 }
 
 // ==========================================

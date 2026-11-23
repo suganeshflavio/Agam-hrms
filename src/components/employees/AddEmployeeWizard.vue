@@ -1,31 +1,37 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   X, User, Briefcase, Landmark, FileText, Users, ClipboardCheck, ArrowLeft, ArrowRight, Check,
   Upload, Trash2, CheckCircle2, AlertTriangle, Pencil,
 } from '@lucide/vue'
 import { hrmsApi } from '@/redux/api/hrmsApi'
-import { useApiMutation, useApiQuery, useAppDispatch, useAppSelector } from '@/redux/vueAdapter'
-import { apiRequest, isMockApi, type ApiError } from '@/services/apiClient'
-import type { Branch, Department, Designation, Employee, Grade, Shift, ApprovalWorkflow } from '@/types/hrms'
+import { useApiMutation, useApiQuery, useAppDispatch } from '@/redux/vueAdapter'
+import { usePermissions } from '@/composables/usePermissions'
+import { apiRequest, type ApiError } from '@/services/apiClient'
+import type { Branch, Department, Employee, Grade, Shift, ApprovalWorkflow, RolePermission } from '@/types/hrms'
 
 const emit = defineEmits<{ close: []; created: [employee: Employee] }>()
 const router = useRouter()
 const dispatch = useAppDispatch()
-const currentUser = useAppSelector((state) => state.auth.user)
+const { isSuperAdmin } = usePermissions()
 
 const { data: departments } = useApiQuery<Department[]>(hrmsApi.endpoints.getDepartments)
-const { data: designations } = useApiQuery<Designation[]>(hrmsApi.endpoints.getDesignations)
 const { data: branches } = useApiQuery<Branch[]>(hrmsApi.endpoints.getBranches)
 const { data: grades } = useApiQuery<Grade[]>(hrmsApi.endpoints.getGrades)
 const { data: employees } = useApiQuery<Employee[]>(hrmsApi.endpoints.getEmployees)
 const { data: shifts } = useApiQuery<Shift[]>(hrmsApi.endpoints.getShifts)
 const { data: workflows } = useApiQuery<ApprovalWorkflow[]>(hrmsApi.endpoints.getWorkflows)
+const { data: roles } = useApiQuery<RolePermission[]>(hrmsApi.endpoints.getRoles)
 const [addEmployee, { isLoading: isSaving }] = useApiMutation(hrmsApi.endpoints.addEmployee)
 
 // ---------------------------------------------------------------- form state
 const today = new Date().toISOString().split('T')[0] as string
+const minimumBirthDate = (() => {
+  const d = new Date()
+  d.setFullYear(d.getFullYear() - 16)
+  return d.toISOString().split('T')[0] as string
+})()
 const form = reactive({
   // personal
   firstName: '', middleName: '', lastName: '', dateOfBirth: '', gender: '', nationality: '', maritalStatus: '',
@@ -49,11 +55,6 @@ const docError = ref('')
 // ---------------------------------------------------------------- options
 const opt = (values: string[]) => values.map((v) => ({ value: v, label: v }))
 const departmentOptions = computed(() => (departments.value || []).map((d) => ({ value: d.name, label: d.name })))
-const designationOptions = computed(() =>
-  (designations.value || [])
-    .filter((d) => !form.department || !d.departmentName || d.departmentName === form.department)
-    .map((d) => d.title),
-)
 const branchOptions = computed(() => (branches.value || []).map((b) => ({ value: b.name, label: b.name })))
 const gradeOptions = computed(() => (grades.value || []).map((g) => ({ value: g.name, label: g.name })))
 const shiftOptions = computed(() => (shifts.value || []).map((s) => ({ value: s.name, label: `${s.name} (${s.startTime} – ${s.endTime})` })))
@@ -63,14 +64,17 @@ const peopleOptions = computed(() =>
     .filter((e) => e.status !== 'Terminated')
     .map((e) => ({ value: e.id, label: `${e.firstName} ${e.lastName} — ${e.designation}` })),
 )
-const roleOptions = computed(() => {
-  const roles = ['General Employee', 'Department Manager', 'HR Manager', 'Payroll Specialist']
-  if (currentUser.value?.role === 'Super Admin') roles.push('Super Admin')
-  return opt(roles)
-})
+// Access roles come from HR Administration -> Roles & Permissions.
+// 'General Employee' = self-service only (no module access).
+const roleOptions = computed(() => [
+  { value: 'General Employee', label: 'Employee (self-service only)' },
+  ...(roles.value || []).map((r) => ({ value: r.id, label: r.roleName })),
+  ...(isSuperAdmin.value ? [{ value: 'Super Admin', label: 'Super Admin (full access)' }] : []),
+])
+const loginRoleLabel = computed(() => roleOptions.value.find((o) => o.value === form.loginRole)?.label || form.loginRole)
 
 // ---------------------------------------------------------------- steps
-type FieldType = 'text' | 'email' | 'tel' | 'date' | 'number' | 'select' | 'combo'
+type FieldType = 'text' | 'email' | 'tel' | 'date' | 'number' | 'select'
 interface Field {
   key: keyof typeof form
   label: string
@@ -78,7 +82,6 @@ interface Field {
   required?: boolean
   placeholder?: string
   options?: () => { value: string; label: string }[]
-  suggestions?: () => string[]
   wide?: boolean
   visible?: () => boolean
   validate?: (value: string) => string | null
@@ -95,7 +98,7 @@ const sections: { title: string; fields: Field[] }[][] = [
         { key: 'middleName', label: 'Middle Name' },
         { key: 'lastName', label: 'Last Name', required: true, placeholder: 'e.g. Murugan' },
         { key: 'dateOfBirth', label: 'Date of Birth', type: 'date', required: true,
-          validate: (v) => (v && v >= today ? 'Date of birth must be in the past' : null) },
+          validate: (v) => (v && v > minimumBirthDate ? 'Employee must be at least 16 years old' : null) },
         { key: 'gender', label: 'Gender', type: 'select', required: true, options: () => opt(['Male', 'Female', 'Non-binary', 'Other', 'Prefer not to say']) },
         { key: 'maritalStatus', label: 'Marital Status', type: 'select', options: () => opt(['Single', 'Married', 'Divorced', 'Widowed', 'Prefer not to say']) },
         { key: 'nationality', label: 'Nationality', placeholder: 'e.g. Indian' },
@@ -129,7 +132,7 @@ const sections: { title: string; fields: Field[] }[][] = [
       fields: [
         { key: 'email', label: 'Work Email', type: 'email', required: true, placeholder: 'name@company.com', validate: emailRule },
         { key: 'department', label: 'Department', type: 'select', required: true, options: () => departmentOptions.value },
-        { key: 'designation', label: 'Designation', type: 'combo', required: true, placeholder: 'Select or type a new one', suggestions: () => designationOptions.value },
+        { key: 'designation', label: 'Designation', required: true, placeholder: 'e.g. Software Engineer' },
         { key: 'branch', label: 'Branch / Location', type: 'select', required: true, options: () => branchOptions.value },
         { key: 'grade', label: 'Salary Grade', type: 'select', options: () => gradeOptions.value },
         { key: 'employmentType', label: 'Employment Type', type: 'select', required: true, options: () => opt(['Full-time', 'Part-time', 'Contract', 'Intern']) },
@@ -217,6 +220,21 @@ const validateStep = (index: number): boolean => {
   return ok
 }
 
+const fieldByKey = Object.fromEntries(sections.flat().flatMap((s) => s.fields).map((f) => [f.key, f])) as Record<string, Field>
+watch(
+  () => ({ ...form }),
+  (current, previous) => {
+    for (const key of Object.keys(current) as (keyof typeof form)[]) {
+      if (current[key] === previous[key] || !errors[key]) continue
+      const field = fieldByKey[key]
+      const value = String(current[key] ?? '').trim()
+      const message = field?.required && !value ? `${field.label} is required` : value && field?.validate ? field.validate(value) : null
+      if (message) errors[key] = message
+      else delete errors[key]
+    }
+  },
+)
+
 const next = () => {
   if (!validateStep(step.value)) return
   step.value = Math.min(step.value + 1, steps.length - 1)
@@ -254,6 +272,22 @@ const onFiles = (event: Event) => {
 }
 const removeDocument = (index: number) => documents.value.splice(index, 1)
 
+const initialPasswordPreview = computed(() => {
+  const prefix = (form.email.split('@')[0] || '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 4)
+  if (!form.email) return 'xxxx@123'
+  return prefix.length === 4 ? `${prefix}@123` : 'a random password (email name is too short)'
+})
+const copiedPassword = ref(false)
+const copyPassword = async (value?: string) => {
+  if (!value) return
+  try {
+    await navigator.clipboard.writeText(value)
+    copiedPassword.value = true
+  } catch {
+    copiedPassword.value = false
+  }
+}
+
 // ---------------------------------------------------------------- submit
 const nameOf = (id: string) => peopleOptions.value.find((p) => p.value === id)?.label.split(' — ')[0] || '—'
 const result = ref<{ employee: Employee; uploaded: number; failedUploads: string[] } | null>(null)
@@ -282,7 +316,9 @@ const submit = async () => {
                    routingCode: form.routingCode, accountType: form.accountType },
     panNumber: form.panNumber.toUpperCase(), uanNumber: form.uanNumber,
     reportingManagerId: form.reportingManagerId, teamLeadId: form.teamLeadId,
-    createLogin: form.createLogin, loginRole: form.loginRole,
+    createLogin: form.createLogin,
+    // Roles from Roles & Permissions are sent by id; the built-in options by name.
+    ...(/^\d+$/.test(form.loginRole) ? { loginRoleId: form.loginRole } : { loginRole: form.loginRole }),
     employeeCode: '',
   }
 
@@ -296,7 +332,7 @@ const submit = async () => {
   // Documents are uploaded after the employee exists; failures don't undo the employee.
   let uploaded = 0
   const failedUploads: string[] = []
-  if (!isMockApi()) {
+  {
     for (const doc of documents.value) {
       const body = new FormData()
       body.append('doc[title]', doc.title)
@@ -340,7 +376,7 @@ const displayValue = (field: Field) => {
 
 <template>
   <div class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
-    <div class="w-full max-w-4xl bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl flex flex-col max-h-[92vh] animate-scaleUp">
+    <div class="w-full max-w-6xl bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl flex flex-col max-h-[92vh] animate-scaleUp">
       <!-- Header -->
       <div class="flex items-center justify-between px-6 md:px-8 pt-6 pb-4 border-b border-slate-100 dark:border-slate-800">
         <div>
@@ -356,7 +392,7 @@ const displayValue = (field: Field) => {
 
       <!-- Stepper -->
       <div v-if="!result" class="px-6 md:px-8 pt-4">
-        <ol class="flex items-center gap-1 overflow-x-auto pb-1">
+        <ol class="flex flex-wrap items-center gap-1 pb-1">
           <li v-for="(s, i) in steps" :key="s.title" class="flex items-center gap-1 shrink-0">
             <button
               type="button"
@@ -386,8 +422,21 @@ const displayValue = (field: Field) => {
             <p class="text-sm text-slate-500">Employee code {{ result.employee.employeeCode }}</p>
           </div>
           <div class="max-w-md mx-auto text-left text-sm space-y-2">
+            <div v-if="result.employee.account?.temporaryPassword" class="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 space-y-1.5">
+              <p class="text-xs text-slate-500">Login for {{ result.employee.account.email }}</p>
+              <div class="flex items-center gap-2">
+                <code class="flex-1 px-3 py-2 rounded-lg bg-white dark:bg-slate-900 font-mono text-base">{{ result.employee.account.temporaryPassword }}</code>
+                <button class="px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-semibold" @click="copyPassword(result.employee.account?.temporaryPassword)">
+                  {{ copiedPassword ? 'Copied' : 'Copy' }}
+                </button>
+              </div>
+              <p class="text-xs text-slate-500">They must set their own password at first sign-in.</p>
+            </div>
+            <p v-if="result.employee.account?.linked" class="flex gap-2 text-emerald-700 dark:text-emerald-400">
+              <CheckCircle2 class="w-4 h-4 shrink-0 mt-0.5" /> Linked to the existing login {{ result.employee.account.email }}.
+            </p>
             <p v-if="result.employee.account?.created && result.employee.account.emailSent" class="flex gap-2 text-emerald-700 dark:text-emerald-400">
-              <CheckCircle2 class="w-4 h-4 shrink-0 mt-0.5" /> Login details emailed to {{ result.employee.account.email }}. They'll set their own password at first sign-in.
+              <CheckCircle2 class="w-4 h-4 shrink-0 mt-0.5" /> Login details emailed to {{ result.employee.account.email }}.
             </p>
             <p v-else-if="result.employee.account?.created" class="flex gap-2 text-amber-700">
               <AlertTriangle class="w-4 h-4 shrink-0 mt-0.5" /> The login was created but the email could not be sent. Use “Resend login details” on the profile.
@@ -417,15 +466,6 @@ const displayValue = (field: Field) => {
                     <option value="">{{ field.required ? 'Select…' : 'None' }}</option>
                     <option v-for="o in field.options?.() || []" :key="o.value" :value="o.value">{{ o.label }}</option>
                   </select>
-                  <template v-else-if="field.type === 'combo'">
-                    <input
-                      :id="field.key" v-model="(form[field.key] as string)" :list="`${field.key}-list`"
-                      :placeholder="field.placeholder" :class="inputClass(field.key)"
-                    />
-                    <datalist :id="`${field.key}-list`">
-                      <option v-for="s in field.suggestions?.() || []" :key="s" :value="s" />
-                    </datalist>
-                  </template>
                   <input
                     v-else :id="field.key" v-model="(form[field.key] as string)" :type="field.type || 'text'"
                     :placeholder="field.placeholder" :class="inputClass(field.key)"
@@ -443,8 +483,9 @@ const displayValue = (field: Field) => {
               <span class="text-sm font-semibold text-slate-800 dark:text-slate-100">Create a login for this employee</span>
             </label>
             <p class="text-xs text-slate-500">
-              A temporary password is generated and emailed to <strong>{{ form.email || 'their work email' }}</strong>.
-              They must set their own password the first time they sign in. The temporary password expires in 7 days.
+              Login email: <strong>{{ form.email || 'their office email' }}</strong>. First password:
+              <strong class="font-mono">{{ initialPasswordPreview }}</strong> — the first 4 characters of the email + <span class="font-mono">@123</span>.
+              It's emailed to them and must be changed at first sign-in; it expires in 7 days.
             </p>
             <div v-if="form.createLogin" class="max-w-xs flex flex-col gap-1.5">
               <label for="loginRole" class="text-sm font-medium text-slate-700 dark:text-slate-200">Access role</label>
@@ -493,7 +534,7 @@ const displayValue = (field: Field) => {
               <h3 class="text-sm font-bold text-slate-900 dark:text-white">{{ steps[i]?.title }}</h3>
               <button class="flex items-center gap-1 text-xs font-semibold text-[#0e6db3]" @click="step = i"><Pencil class="w-3.5 h-3.5" /> Edit</button>
             </div>
-            <dl class="grid grid-cols-2 md:grid-cols-3 gap-x-6 gap-y-2 text-sm">
+            <dl class="grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-3 text-sm">
               <template v-for="section in stepSections" :key="section.title">
                 <template v-for="field in section.fields" :key="field.key">
                   <div v-if="!field.visible || field.visible()">
@@ -511,7 +552,7 @@ const displayValue = (field: Field) => {
             </div>
             <p class="text-sm text-slate-600 dark:text-slate-300">{{ documents.length }} document(s) to upload.</p>
             <p class="text-sm text-slate-600 dark:text-slate-300">
-              {{ form.createLogin ? `Login (${form.loginRole}) — credentials emailed to ${form.email}` : 'No login will be created now.' }}
+              {{ form.createLogin ? `Login (${loginRoleLabel}) — credentials emailed to ${form.email}` : 'No login will be created now.' }}
             </p>
           </section>
           <p v-if="submitError" class="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/30 text-sm text-rose-700 dark:text-rose-300" role="alert">{{ submitError }}</p>
