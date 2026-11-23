@@ -45,6 +45,11 @@ export interface AuthUser {
   zohoId?: string
   zohoAccountType?: string
   permissions: UserPermission[]
+  userId?: string
+  companyName?: string
+  companyCode?: string
+  /** True after HR creates the account; the user must set their own password. */
+  mustChangePassword?: boolean
 }
 
 export interface AuthState {

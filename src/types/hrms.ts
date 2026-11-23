@@ -116,7 +116,7 @@ export interface Employee {
   phone: string
   avatarUrl?: string
   dateOfBirth?: string
-  gender?: 'Male' | 'Female' | 'Non-binary' | 'Other'
+  gender?: 'Male' | 'Female' | 'Non-binary' | 'Other' | 'Prefer not to say'
   address?: string
   emergencyContact?: string | {
     name: string
@@ -146,9 +146,25 @@ export interface Employee {
     bankName: string
     accountNumber: string
     routingCode: string
-    accountType: 'Checking' | 'Savings'
+    accountType: 'Checking' | 'Savings' | 'Current'
     accountName?: string
   }
+
+  // Captured by the Add Employee wizard (backend: core_hrms)
+  middleName?: string
+  personalEmail?: string
+  nationality?: string
+  maritalStatus?: string
+  addressDetails?: { line?: string; city?: string; state?: string; postalCode?: string; country?: string }
+  probationEndDate?: string
+  teamLeadId?: string
+  teamLeadName?: string
+  panNumber?: string
+  uanNumber?: string
+  esiNumber?: string
+  hasLogin?: boolean
+  loginPending?: boolean
+  account?: { created: boolean; email: string; emailSent: boolean } | null
 }
 
 // ==========================================

@@ -80,6 +80,7 @@ export interface RequestOptions {
 }
 
 /** Performs a request and returns the `data` field of the backend envelope. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- default lets runQuery infer T from the endpoint's result type
 export async function apiRequest<T = any>(path: string, options: RequestOptions = {}): Promise<T> {
   const { method = 'GET', body, query, auth = true } = options
   // Not logged in yet (e.g. layout data on the login page): don't call the server.
@@ -129,8 +130,8 @@ export async function runQuery<T>(
 ): Promise<{ data: T; error?: undefined } | { error: ApiError; data?: undefined }> {
   try {
     return { data: isMockApi() ? mock() : await live() }
-  } catch (err: any) {
+  } catch (err: unknown) {
     if (err && typeof err === 'object' && 'status' in err) return { error: err as ApiError }
-    return { error: { status: 500, data: err?.message || 'Unexpected error' } }
+    return { error: { status: 500, data: err instanceof Error ? err.message : 'Unexpected error' } }
   }
 }

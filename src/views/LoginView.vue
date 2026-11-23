@@ -38,6 +38,8 @@ const router = useRouter()
 const route = useRoute()
 const dispatch = useAppDispatch()
 const zohoConfig = getZohoConfig()
+// Zoho sign-in is switched off unless VITE_ENABLE_ZOHO_LOGIN=true (backend: ZOHO_LOGIN_ENABLED=true).
+const zohoEnabled = import.meta.env.VITE_ENABLE_ZOHO_LOGIN === 'true'
 
 // Standard Login Form
 const loginSchema = z.object({
@@ -49,8 +51,8 @@ const loginSchema = z.object({
 const { handleSubmit, isSubmitting } = useForm({
   validationSchema: toTypedSchema(loginSchema),
   initialValues: {
-    email: 'priya.sharma@agam.internal',
-    password: 'Password@2026',
+    email: isMockApi() ? 'priya.sharma@agam.internal' : '',
+    password: isMockApi() ? 'Password@2026' : '',
     rememberMe: true,
   },
 })
@@ -66,7 +68,7 @@ const customZohoEmail = ref('')
 // Check for incoming Zoho OAuth Callback (?code=...)
 onMounted(async () => {
   const code = route.query.code as string
-  if (code) {
+  if (code && zohoEnabled) {
     isProcessingOAuthCallback.value = true
     zohoAuthenticating.value = true
     try {
@@ -103,6 +105,10 @@ onMounted(async () => {
 
 const completeBackendLogin = async (session: BackendSession) => {
   dispatch(loginSuccess({ user: session.user, token: session.token, expiresAt: session.expiresAt }))
+  if (session.user.mustChangePassword) {
+    await router.push('/change-password')
+    return
+  }
   // Data requested before login (e.g. the sidebar's role list) failed with 401; refetch it.
   dispatch(hrmsApi.util.invalidateTags(['Stats', 'Company', 'Branches', 'Departments', 'Designations', 'Roles', 'Employees',
     'Onboarding', 'Shifts', 'Attendance', 'Regularizations', 'Leaves', 'Payroll', 'MasterData', 'Workflows']))
@@ -115,8 +121,8 @@ const handleDemoLogin = async (profileKey: 'admin' | 'manager' | 'employee') => 
     loginError.value = ''
     try {
       await completeBackendLogin(await loginWithPassword(demoUsers[profileKey].email, DEMO_PASSWORD))
-    } catch (err: any) {
-      loginError.value = err.message
+    } catch (err: unknown) {
+      loginError.value = err instanceof Error ? err.message : 'Login failed'
     }
     return
   }
@@ -138,8 +144,8 @@ const onSubmit = handleSubmit(async (values) => {
   if (!isMockApi()) {
     try {
       await completeBackendLogin(await loginWithPassword(values.email, values.password))
-    } catch (err: any) {
-      loginError.value = err.message
+    } catch (err: unknown) {
+      loginError.value = err instanceof Error ? err.message : 'Login failed'
     }
     return
   }
@@ -184,8 +190,8 @@ const handleSelectZohoAccount = async (account: ZohoAccountProfile) => {
       session.user = { ...session.user, authProvider: 'zoho', zohoId: account.zohoId, zohoAccountType: account.zohoAccountType }
       isZohoModalOpen.value = false
       await completeBackendLogin(session)
-    } catch (err: any) {
-      zohoError.value = err.message
+    } catch (err: unknown) {
+      zohoError.value = err instanceof Error ? err.message : 'Sign-in failed'
     } finally {
       zohoAuthenticating.value = false
     }
@@ -272,7 +278,8 @@ const handleCustomZohoSubmit = () => {
 
       <!-- Login Form Card -->
       <div class="p-7 sm:p-8 rounded-3xl bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-slate-200/80 dark:border-slate-800 shadow-2xl shadow-[#044663]/15 dark:shadow-none space-y-5">
-        <!-- Zoho OneAuth SSO Primary Button -->
+        <!-- Zoho OneAuth SSO Primary Button (disabled unless VITE_ENABLE_ZOHO_LOGIN=true) -->
+        <template v-if="zohoEnabled">
         <div>
           <button
             type="button"
@@ -292,6 +299,7 @@ const handleCustomZohoSubmit = () => {
           <span class="text-[10px] font-bold uppercase tracking-wider text-slate-400">or corporate password</span>
           <div class="h-px bg-slate-200 dark:bg-slate-800 flex-1"></div>
         </div>
+        </template>
 
         <form @submit="onSubmit" class="space-y-4">
           <FormInput
@@ -315,9 +323,9 @@ const handleCustomZohoSubmit = () => {
               <input type="checkbox" checked class="rounded border-slate-300 text-[#1989d9] focus:ring-[#1989d9]" />
               <span>Remember this session</span>
             </label>
-            <a href="#" class="font-semibold text-[#0e6db3] dark:text-[#38a5e4] hover:underline">
+            <RouterLink to="/forgot-password" class="font-semibold text-[#0e6db3] dark:text-[#38a5e4] hover:underline">
               Forgot password?
-            </a>
+            </RouterLink>
           </div>
 
           <!-- Brand Gradient Submit Button -->
@@ -335,14 +343,14 @@ const handleCustomZohoSubmit = () => {
 
       <!-- Security Trust Footer -->
       <div class="text-center text-xs text-slate-400 space-y-1">
-        <p>Protected by 256-bit TLS Encryption • Zoho One SSO Verified</p>
+        <p>Protected by 256-bit TLS Encryption<span v-if="zohoEnabled"> • Zoho One SSO Verified</span></p>
         <p class="text-[11px] text-slate-500">© 2026 AGAM Technologies Ltd. All rights reserved.</p>
       </div>
     </div>
 
     <!-- Zoho Auth SSO Modal (Interactive OAuth Verification) -->
     <div
-      v-if="isZohoModalOpen || isProcessingOAuthCallback"
+      v-if="zohoEnabled && (isZohoModalOpen || isProcessingOAuthCallback)"
       class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-fadeIn"
     >
       <div class="w-full max-w-lg bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl p-6 sm:p-7 space-y-5 animate-scaleUp">

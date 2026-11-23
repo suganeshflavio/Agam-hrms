@@ -1,8 +1,6 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { useForm } from 'vee-validate'
-import { toTypedSchema } from '@vee-validate/zod'
 import {
   UserPlus,
   Search,
@@ -12,7 +10,6 @@ import {
   Phone,
   Building,
   Briefcase,
-  X,
   CheckCircle2,
   Eye,
   Download,
@@ -22,10 +19,8 @@ import {
 } from '@lucide/vue'
 import { hrmsApi } from '@/redux/api/hrmsApi'
 import { useApiQuery, useApiMutation, useAppSelector } from '@/redux/vueAdapter'
-import type { Employee, Department, Branch, Grade } from '@/types/hrms'
-import { employeeSchema, type EmployeeFormValues } from '@/schemas/employeeSchema'
-import FormInput from '@/components/forms/FormInput.vue'
-import FormSelect from '@/components/forms/FormSelect.vue'
+import type { Employee, Department, Branch } from '@/types/hrms'
+import AddEmployeeWizard from '@/components/employees/AddEmployeeWizard.vue'
 
 const router = useRouter()
 const currentUser = useAppSelector((state) => state.auth.user)
@@ -51,8 +46,6 @@ const isDepartmentManager = computed(() => {
 const { data: employees, isLoading } = useApiQuery<Employee[]>(hrmsApi.endpoints.getEmployees)
 const { data: departments } = useApiQuery<Department[]>(hrmsApi.endpoints.getDepartments)
 const { data: branches } = useApiQuery<Branch[]>(hrmsApi.endpoints.getBranches)
-const { data: grades } = useApiQuery<Grade[]>(hrmsApi.endpoints.getGrades)
-const [addEmployee, { isLoading: isAdding }] = useApiMutation(hrmsApi.endpoints.addEmployee)
 const [deleteEmployee] = useApiMutation(hrmsApi.endpoints.deleteEmployee)
 
 // Filters & Modal State
@@ -63,40 +56,12 @@ const selectedBranch = ref('All')
 const isModalOpen = ref(false)
 const successMessage = ref('')
 
-// VeeValidate + Zod Form Setup
-const { handleSubmit, resetForm } = useForm<EmployeeFormValues>({
-  validationSchema: toTypedSchema(employeeSchema),
-  initialValues: {
-    firstName: '',
-    lastName: '',
-    email: '',
-    phone: '',
-    department: 'Engineering',
-    designation: '',
-    employmentType: 'Full-time',
-    status: 'Active',
-    joiningDate: new Date().toISOString().split('T')[0],
-    salary: 85000,
-    branch: 'San Francisco HQ',
-    grade: 'Professional / Lead (P1-P3)',
-  },
-})
-
-const onSubmit = handleSubmit(async (values) => {
-  const code = `AGM-${Math.floor(1000 + Math.random() * 9000)}`
-  await addEmployee({
-    ...values,
-    employeeCode: code,
-  })
-
-  successMessage.value = `${values.firstName} ${values.lastName} added successfully!`
+const onEmployeeCreated = (employee: Employee) => {
+  successMessage.value = `${employee.firstName} ${employee.lastName} added successfully!`
   setTimeout(() => {
     successMessage.value = ''
   }, 3500)
-
-  resetForm()
-  isModalOpen.value = false
-})
+}
 
 // Role-Based Access Scoping:
 // Super Admin / HR can see ALL employees across the organization.
@@ -154,41 +119,6 @@ const filteredEmployees = computed(() => {
     return matchesSearch && matchesDept && matchesStatus && matchesBranch
   })
 })
-
-const departmentOptions = computed(() => {
-  return (departments.value || []).map((d) => ({
-    value: d.name,
-    label: d.name,
-  }))
-})
-
-const branchOptions = computed(() => {
-  return (branches.value || []).map((b) => ({
-    value: b.name,
-    label: b.name,
-  }))
-})
-
-const gradeOptions = computed(() => {
-  return (grades.value || []).map((g) => ({
-    value: g.name,
-    label: g.name,
-  }))
-})
-
-const employmentTypeOptions = [
-  { value: 'Full-time', label: 'Full-time' },
-  { value: 'Part-time', label: 'Part-time' },
-  { value: 'Contract', label: 'Contract' },
-  { value: 'Intern', label: 'Intern' },
-]
-
-const statusOptions = [
-  { value: 'Active', label: 'Active' },
-  { value: 'On Leave', label: 'On Leave' },
-  { value: 'Probation', label: 'Probation' },
-  { value: 'Terminated', label: 'Terminated' },
-]
 
 const handleDelete = async (id: string, name: string) => {
   if (confirm(`Are you sure you want to delete ${name}?`)) {
@@ -440,109 +370,7 @@ const exportToCsv = () => {
       </div>
     </div>
 
-    <!-- Add Employee Modal Dialog (VeeValidate + Zod) -->
-    <div
-      v-if="isModalOpen"
-      class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs"
-    >
-      <div class="w-full max-w-2xl bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl p-6 md:p-8 overflow-y-auto max-h-[90vh] animate-scaleUp">
-        <div class="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-800">
-          <div>
-            <h2 class="text-xl font-bold text-slate-900 dark:text-white">Onboard New Employee</h2>
-            <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Fill out the details verified with VeeValidate and Zod schema.
-            </p>
-          </div>
-          <button
-            @click="isModalOpen = false"
-            class="p-2 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
-          >
-            <X class="w-5 h-5" />
-          </button>
-        </div>
-
-        <form @submit="onSubmit" class="space-y-4 mt-6">
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <FormInput name="firstName" label="First Name" placeholder="e.g. Liam" required />
-            <FormInput name="lastName" label="Last Name" placeholder="e.g. Hemsworth" required />
-          </div>
-
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <FormInput name="email" type="email" label="Work Email" placeholder="name@agam.internal" required />
-            <FormInput name="phone" label="Phone Number" placeholder="+1 (555) 000-0000" required />
-          </div>
-
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <FormSelect
-              name="department"
-              label="Department"
-              :options="departmentOptions"
-              required
-            />
-            <FormInput name="designation" label="Designation / Role" placeholder="e.g. Lead QA Engineer" required />
-          </div>
-
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <FormSelect
-              name="branch"
-              label="Branch / Location"
-              :options="branchOptions"
-            />
-            <FormSelect
-              name="grade"
-              label="Salary Grade"
-              :options="gradeOptions"
-            />
-          </div>
-
-          <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <FormSelect
-              name="employmentType"
-              label="Employment Type"
-              :options="employmentTypeOptions"
-              required
-            />
-            <FormSelect
-              name="status"
-              label="Status"
-              :options="statusOptions"
-              required
-            />
-            <FormInput
-              name="salary"
-              type="number"
-              label="Annual Salary ($)"
-              placeholder="e.g. 95000"
-              required
-            />
-          </div>
-
-          <FormInput
-            name="joiningDate"
-            type="date"
-            label="Joining Date"
-            required
-          />
-
-          <div class="flex items-center justify-end gap-3 pt-4 border-t border-slate-100 dark:border-slate-800">
-            <button
-              type="button"
-              @click="isModalOpen = false"
-              class="px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              :disabled="isAdding"
-              class="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs shadow-md shadow-indigo-600/20 active:scale-95 transition-all disabled:opacity-50"
-            >
-              <span v-if="isAdding">Saving via Redux...</span>
-              <span v-else>Save Employee</span>
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+    <!-- Add Employee: multi-step onboarding wizard -->
+    <AddEmployeeWizard v-if="isModalOpen" @close="isModalOpen = false" @created="onEmployeeCreated" />
   </div>
 </template>

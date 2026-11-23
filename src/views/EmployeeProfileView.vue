@@ -30,7 +30,8 @@ import {
   Landmark,
 } from '@lucide/vue'
 import { hrmsApi } from '@/redux/api/hrmsApi'
-import { useApiQuery, useApiMutation } from '@/redux/vueAdapter'
+import { useApiQuery, useApiMutation, useAppDispatch, useAppSelector } from '@/redux/vueAdapter'
+import { apiRequest, type ApiError } from '@/services/apiClient'
 import type { Employee, Department, Designation, Grade, EmployeeDocument } from '@/types/hrms'
 import FormInput from '@/components/forms/FormInput.vue'
 import FormSelect from '@/components/forms/FormSelect.vue'
@@ -71,6 +72,34 @@ const showFeedback = (msg: string, type: 'success' | 'error' = 'success') => {
     feedbackMessage.value = ''
   }, 3500)
 }
+
+// Login account (temporary password emailed by the backend)
+const dispatch = useAppDispatch()
+const currentUser = useAppSelector((state) => state.auth.user)
+const canManageAccounts = computed(() =>
+  currentUser.value?.permissions?.some((p) => p.module === 'admin' && p.actions.create) ?? false,
+)
+const isAccountBusy = ref(false)
+
+const accountRequest = async (path: string, success: string) => {
+  if (!employee.value) return
+  isAccountBusy.value = true
+  try {
+    const res = await apiRequest<{ emailSent?: boolean; account?: { emailSent: boolean } }>(`/app/employees/${employee.value.id}/${path}`, {
+      method: 'POST',
+      body: { loginRole: 'General Employee' },
+    })
+    const sent = res?.emailSent ?? res?.account?.emailSent
+    showFeedback(sent === false ? 'Login saved, but the email could not be sent' : success, sent === false ? 'error' : 'success')
+    dispatch(hrmsApi.util.invalidateTags(['Employees']))
+  } catch (err) {
+    showFeedback((err as ApiError).data || 'Request failed', 'error')
+  } finally {
+    isAccountBusy.value = false
+  }
+}
+const createLogin = () => accountRequest('account', 'Login created and details emailed')
+const resendLogin = () => accountRequest('account/resend', 'New login details emailed')
 
 // Promotion / Transfer Form Setup (Zod + VeeValidate)
 const transferSchema = z.object({
@@ -149,13 +178,23 @@ const handleVerifyDoc = async (docId: string, status: 'Verified' | 'Rejected') =
 }
 
 // Formatting & Helpers
+const formatDate = (value?: string) =>
+  value ? new Date(`${value}T00:00:00`).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : '—'
+
+const addressLines = computed(() => {
+  const d = employee.value?.addressDetails
+  const line = d?.line || employee.value?.address
+  const rest = [d?.city, [d?.state, d?.postalCode].filter(Boolean).join(' '), d?.country].filter(Boolean).join(', ')
+  return [line, rest].filter(Boolean) as string[]
+})
+
 const emergencyContactInfo = computed(() => {
   const contact = employee.value?.emergencyContact
   if (!contact) {
-    return { name: 'Jane Connor (Spouse)', relation: 'Spouse / Partner', phone: '+1 (555) 345-6789' }
+    return { name: 'Not provided', relation: '—', phone: '—' }
   }
   if (typeof contact === 'string') {
-    return { name: contact, relation: 'Emergency Contact', phone: '+1 (555) 345-6789' }
+    return { name: contact, relation: 'Emergency Contact', phone: '—' }
   }
   return contact
 })
@@ -295,7 +334,7 @@ const estimatedNetPay = computed(() => monthlyGross.value - (estimatedTds.value 
                 </span>
                 <span class="flex items-center gap-1.5">
                   <MapPin class="w-3.5 h-3.5 text-slate-400" />
-                  {{ employee.branch || 'San Francisco HQ' }}
+                  {{ employee.branch || '—' }}
                 </span>
               </div>
             </div>
@@ -313,7 +352,7 @@ const estimatedNetPay = computed(() => monthlyGross.value - (estimatedTds.value 
             </div>
             <div class="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-800 text-center col-span-2 sm:col-span-1">
               <span class="text-[10px] font-semibold text-slate-400 uppercase tracking-wider block">Grade</span>
-              <span class="text-xs font-bold text-slate-800 dark:text-slate-200 mt-0.5 block truncate">{{ employee.grade || 'Lead P2' }}</span>
+              <span class="text-xs font-bold text-slate-800 dark:text-slate-200 mt-0.5 block truncate">{{ employee.grade || '—' }}</span>
             </div>
           </div>
         </div>
@@ -355,7 +394,7 @@ const estimatedNetPay = computed(() => monthlyGross.value - (estimatedTds.value 
           <div class="p-4 rounded-2xl bg-indigo-50/60 dark:bg-indigo-950/30 border border-indigo-100 dark:border-indigo-900/50">
             <span class="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400">Direct Manager</span>
             <p class="text-sm font-bold text-slate-900 dark:text-white mt-0.5">
-              {{ employee.reportingManagerName || 'Sarah Connor (VP of Engineering)' }}
+              {{ employee.reportingManagerName || 'Not assigned' }}
             </p>
             <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">manager@agam.internal</p>
           </div>
@@ -371,7 +410,7 @@ const estimatedNetPay = computed(() => monthlyGross.value - (estimatedTds.value 
             </div>
             <div class="flex justify-between py-1.5 border-b border-slate-100 dark:border-slate-800">
               <span class="text-slate-500">Work Location</span>
-              <span class="font-bold text-slate-800 dark:text-slate-200">{{ employee.branch || 'San Francisco HQ' }}</span>
+              <span class="font-bold text-slate-800 dark:text-slate-200">{{ employee.branch || '—' }}</span>
             </div>
             <div class="flex justify-between py-1.5">
               <span class="text-slate-500">Probation Period</span>
@@ -476,19 +515,19 @@ const estimatedNetPay = computed(() => monthlyGross.value - (estimatedTds.value 
           </div>
           <div class="space-y-1">
             <span class="text-slate-400 font-medium">Date of Birth</span>
-            <p class="font-bold text-slate-800 dark:text-slate-200 text-sm">October 14, 1991</p>
+            <p class="font-bold text-slate-800 dark:text-slate-200 text-sm">{{ formatDate(employee.dateOfBirth) }}</p>
           </div>
           <div class="space-y-1">
             <span class="text-slate-400 font-medium">Gender</span>
-            <p class="font-bold text-slate-800 dark:text-slate-200 text-sm">Prefer to state</p>
+            <p class="font-bold text-slate-800 dark:text-slate-200 text-sm">{{ employee.gender || '—' }}</p>
           </div>
           <div class="space-y-1">
             <span class="text-slate-400 font-medium">Nationality</span>
-            <p class="font-bold text-slate-800 dark:text-slate-200 text-sm">United States</p>
+            <p class="font-bold text-slate-800 dark:text-slate-200 text-sm">{{ employee.nationality || '—' }}</p>
           </div>
           <div class="space-y-1">
             <span class="text-slate-400 font-medium">Marital Status</span>
-            <p class="font-bold text-slate-800 dark:text-slate-200 text-sm">Married</p>
+            <p class="font-bold text-slate-800 dark:text-slate-200 text-sm">{{ employee.maritalStatus || '—' }}</p>
           </div>
         </div>
 
@@ -501,7 +540,7 @@ const estimatedNetPay = computed(() => monthlyGross.value - (estimatedTds.value 
             </div>
             <div class="space-y-1">
               <span class="text-slate-400 font-medium">Personal Email</span>
-              <p class="font-bold text-slate-800 dark:text-slate-200 text-sm">{{ (employee.firstName || 'user').toLowerCase() }}.personal@gmail.com</p>
+              <p class="font-bold text-slate-800 dark:text-slate-200 text-sm">{{ employee.personalEmail || '—' }}</p>
             </div>
             <div class="space-y-1">
               <span class="text-slate-400 font-medium">Mobile Phone</span>
@@ -513,9 +552,11 @@ const estimatedNetPay = computed(() => monthlyGross.value - (estimatedTds.value 
         <div class="pt-6 border-t border-slate-100 dark:border-slate-800">
           <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4">Residential Address</h3>
           <div class="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/60 dark:border-slate-800 text-xs text-slate-600 dark:text-slate-300 space-y-1">
-            <p class="font-bold text-slate-800 dark:text-slate-100 text-sm">742 Evergreen Terrace</p>
-            <p>San Francisco, CA 94107, United States</p>
-            <p class="text-[11px] text-slate-400">Proof of residence verified via Utility Bill on file</p>
+            <template v-if="addressLines.length">
+              <p class="font-bold text-slate-800 dark:text-slate-100 text-sm">{{ addressLines[0] }}</p>
+              <p v-if="addressLines[1]">{{ addressLines[1] }}</p>
+            </template>
+            <p v-else class="text-slate-400">No address on file</p>
           </div>
         </div>
       </div>
@@ -542,11 +583,11 @@ const estimatedNetPay = computed(() => monthlyGross.value - (estimatedTds.value 
           </div>
           <div class="space-y-1">
             <span class="text-slate-400 font-medium">Salary Grade Band</span>
-            <p class="font-bold text-slate-800 dark:text-slate-200 text-sm">{{ employee.grade || 'Professional / Lead (P1-P3)' }}</p>
+            <p class="font-bold text-slate-800 dark:text-slate-200 text-sm">{{ employee.grade || '—' }}</p>
           </div>
           <div class="space-y-1">
             <span class="text-slate-400 font-medium">Assigned Branch / Location</span>
-            <p class="font-bold text-slate-800 dark:text-slate-200 text-sm">{{ employee.branch || 'San Francisco HQ' }}</p>
+            <p class="font-bold text-slate-800 dark:text-slate-200 text-sm">{{ employee.branch || '—' }}</p>
           </div>
           <div class="space-y-1">
             <span class="text-slate-400 font-medium">Employment Type</span>
@@ -558,11 +599,41 @@ const estimatedNetPay = computed(() => monthlyGross.value - (estimatedTds.value 
           </div>
           <div class="space-y-1">
             <span class="text-slate-400 font-medium">Reporting Manager</span>
-            <p class="font-bold text-slate-800 dark:text-slate-200 text-sm">{{ employee.reportingManagerName || 'Sarah Connor' }}</p>
+            <p class="font-bold text-slate-800 dark:text-slate-200 text-sm">{{ employee.reportingManagerName || 'Not assigned' }}</p>
           </div>
           <div class="space-y-1">
             <span class="text-slate-400 font-medium">Shift Assignment</span>
-            <p class="font-bold text-slate-800 dark:text-slate-200 text-sm">General Day Shift (09:00 AM - 06:00 PM)</p>
+            <p class="font-bold text-slate-800 dark:text-slate-200 text-sm">{{ employee.shift || 'Not assigned' }}</p>
+          </div>
+          <div class="space-y-1">
+            <span class="text-slate-400 font-medium">Team Lead</span>
+            <p class="font-bold text-slate-800 dark:text-slate-200 text-sm">{{ employee.teamLeadName || 'Not assigned' }}</p>
+          </div>
+          <div class="space-y-1">
+            <span class="text-slate-400 font-medium">Approval Workflow</span>
+            <p class="font-bold text-slate-800 dark:text-slate-200 text-sm">{{ employee.approvalWorkflow || 'Company default' }}</p>
+          </div>
+          <div class="space-y-1">
+            <span class="text-slate-400 font-medium">Login Access</span>
+            <p class="font-bold text-sm" :class="employee.hasLogin ? (employee.loginPending ? 'text-amber-600' : 'text-emerald-600') : 'text-slate-500'">
+              {{ employee.hasLogin ? (employee.loginPending ? 'Created — waiting for first sign-in' : 'Active') : 'No login' }}
+            </p>
+            <div v-if="canManageAccounts" class="flex gap-2 pt-1">
+              <button
+                v-if="!employee.hasLogin" type="button" :disabled="isAccountBusy"
+                class="px-3 py-1.5 rounded-lg bg-[#1989d9] text-white text-[11px] font-semibold disabled:opacity-50"
+                @click="createLogin"
+              >
+                Create login
+              </button>
+              <button
+                v-else-if="employee.loginPending" type="button" :disabled="isAccountBusy"
+                class="px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-[11px] font-semibold disabled:opacity-50"
+                @click="resendLogin"
+              >
+                Resend login details
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -627,7 +698,7 @@ const estimatedNetPay = computed(() => monthlyGross.value - (estimatedTds.value 
             <div class="space-y-1">
               <span class="text-slate-400 font-medium">Bank Name</span>
               <p class="font-bold text-slate-800 dark:text-slate-200 text-sm">
-                {{ employee.bankDetails?.bankName || 'JPMorgan Chase & Co.' }}
+                {{ employee.bankDetails?.bankName || '—' }}
               </p>
             </div>
             <div class="space-y-1">
@@ -639,24 +710,24 @@ const estimatedNetPay = computed(() => monthlyGross.value - (estimatedTds.value 
             <div class="space-y-1">
               <span class="text-slate-400 font-medium">Account Number</span>
               <p class="font-bold text-slate-800 dark:text-slate-200 text-sm font-mono">
-                {{ employee.bankDetails?.accountNumber || '•••••••• 4892' }}
+                {{ employee.bankDetails?.accountNumber || '—' }}
               </p>
             </div>
             <div class="space-y-1">
-              <span class="text-slate-400 font-medium">Routing Number (ACH / SWIFT)</span>
+              <span class="text-slate-400 font-medium">IFSC / Routing Code</span>
               <p class="font-bold text-slate-800 dark:text-slate-200 text-sm font-mono">
-                {{ employee.bankDetails?.routingCode || '021000021' }}
+                {{ employee.bankDetails?.routingCode || '—' }}
               </p>
             </div>
             <div class="space-y-1">
               <span class="text-slate-400 font-medium">Account Classification</span>
               <p class="font-bold text-slate-800 dark:text-slate-200 text-sm">
-                {{ employee.bankDetails?.accountType || 'Checking (Direct Deposit)' }}
+                {{ employee.bankDetails?.accountType || '—' }}
               </p>
             </div>
             <div class="space-y-1">
-              <span class="text-slate-400 font-medium">Verification Method</span>
-              <p class="font-bold text-emerald-600 dark:text-emerald-400 text-sm">Automated Micro-Deposit Verified</p>
+              <span class="text-slate-400 font-medium">PAN / UAN</span>
+              <p class="font-bold text-slate-800 dark:text-slate-200 text-sm font-mono">{{ employee.panNumber || '—' }} / {{ employee.uanNumber || '—' }}</p>
             </div>
           </div>
         </div>

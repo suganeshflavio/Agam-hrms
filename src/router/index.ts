@@ -12,6 +12,9 @@ import LeaveView from '@/views/LeaveView.vue'
 import PayrollView from '@/views/PayrollView.vue'
 import SelfServiceView from '@/views/SelfServiceView.vue'
 import DepartmentsView from '@/views/DepartmentsView.vue'
+import ForgotPasswordView from '@/views/ForgotPasswordView.vue'
+import ResetPasswordView from '@/views/ResetPasswordView.vue'
+import ChangePasswordView from '@/views/ChangePasswordView.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -27,6 +30,24 @@ const router = createRouter({
       name: 'auth-callback',
       component: LoginView,
       meta: { public: true },
+    },
+    {
+      path: '/forgot-password',
+      name: 'forgot-password',
+      component: ForgotPasswordView,
+      meta: { public: true },
+    },
+    {
+      path: '/reset-password',
+      name: 'reset-password',
+      component: ResetPasswordView,
+      meta: { public: true },
+    },
+    {
+      path: '/change-password',
+      name: 'change-password',
+      component: ChangePasswordView,
+      meta: { requiresAuth: true, bare: true },
     },
     {
       path: '/',
@@ -115,6 +136,11 @@ router.beforeEach((to) => {
 
   if (!isAuthenticated) {
     return { path: '/login', query: { redirect: to.fullPath } }
+  }
+
+  // Accounts created by HR must replace the temporary password first.
+  if (user?.mustChangePassword && to.name !== 'change-password') {
+    return '/change-password'
   }
 
   // Role check if configured on route

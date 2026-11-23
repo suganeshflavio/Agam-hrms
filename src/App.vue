@@ -13,7 +13,8 @@ onMounted(() => {
 </script>
 
 <template>
-  <RouterView v-if="route.path === '/login'" />
+  <!-- Sign-in and password screens render without the app shell -->
+  <RouterView v-if="route.path === '/login' || route.meta.public || route.meta.bare" />
   <AppLayout v-else>
     <RouterView />
   </AppLayout>
