@@ -6,6 +6,8 @@ import {
   Search,
   Filter,
   Trash2,
+  KeyRound,
+  Copy,
   Mail,
   Phone,
   Building,
@@ -19,6 +21,7 @@ import {
 } from '@lucide/vue'
 import { hrmsApi } from '@/redux/api/hrmsApi'
 import { useApiQuery, useApiMutation, useAppSelector } from '@/redux/vueAdapter'
+import { apiRequest, type ApiError } from '@/services/apiClient'
 import type { Employee, Department, Branch } from '@/types/hrms'
 import AddEmployeeWizard from '@/components/employees/AddEmployeeWizard.vue'
 
@@ -119,6 +122,45 @@ const filteredEmployees = computed(() => {
     return matchesSearch && matchesDept && matchesStatus && matchesBranch
   })
 })
+
+// Password reset (Super Admin / HR with user-management rights)
+const canManageAccounts = computed(() =>
+  currentUser.value?.permissions?.some((p) => p.module === 'admin' && p.actions.create) ?? false,
+)
+const resetResult = ref<{ name: string; email: string; password: string; emailSent: boolean } | null>(null)
+const resetError = ref('')
+const resettingId = ref<string | null>(null)
+const copied = ref(false)
+
+const handleResetPassword = async (emp: Employee) => {
+  const name = `${emp.firstName} ${emp.lastName}`
+  if (!confirm(`Reset the password for ${name}?\n\nA new temporary password will be emailed to them and shown to you once. Their current password stops working immediately.`)) return
+  resetError.value = ''
+  resettingId.value = emp.id
+  try {
+    const res = await apiRequest<{ email: string; emailSent: boolean; temporaryPassword: string }>(
+      `/app/employees/${emp.id}/account/resend`,
+      { method: 'POST' },
+    )
+    copied.value = false
+    resetResult.value = { name, email: res.email, password: res.temporaryPassword, emailSent: res.emailSent }
+  } catch (err) {
+    resetError.value = (err as ApiError).data || 'Password could not be reset'
+    setTimeout(() => (resetError.value = ''), 5000)
+  } finally {
+    resettingId.value = null
+  }
+}
+
+const copyPassword = async () => {
+  if (!resetResult.value) return
+  try {
+    await navigator.clipboard.writeText(resetResult.value.password)
+    copied.value = true
+  } catch {
+    copied.value = false
+  }
+}
 
 const handleDelete = async (id: string, name: string) => {
   if (confirm(`Are you sure you want to delete ${name}?`)) {
@@ -356,6 +398,15 @@ const exportToCsv = () => {
                     <Eye class="w-4 h-4" />
                   </button>
                   <button
+                    v-if="canManageAccounts && emp.hasLogin && emp.id !== currentUser?.employeeId"
+                    :disabled="resettingId === emp.id"
+                    @click="handleResetPassword(emp)"
+                    title="Reset Password"
+                    class="p-1.5 rounded-lg text-slate-400 hover:text-amber-600 dark:hover:text-amber-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors disabled:opacity-40"
+                  >
+                    <KeyRound class="w-4 h-4" />
+                  </button>
+                  <button
                     @click="handleDelete(emp.id, `${emp.firstName} ${emp.lastName}`)"
                     title="Remove Employee"
                     class="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
@@ -367,6 +418,42 @@ const exportToCsv = () => {
             </tr>
           </tbody>
         </table>
+      </div>
+    </div>
+
+    <!-- Password reset error -->
+    <div v-if="resetError" class="fixed bottom-6 right-6 z-50 px-4 py-3 rounded-xl bg-rose-600 text-white text-sm shadow-lg" role="alert">
+      {{ resetError }}
+    </div>
+
+    <!-- Password reset result: the temporary password is shown once -->
+    <div v-if="resetResult" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+      <div class="w-full max-w-md bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl p-6 space-y-4">
+        <div class="flex items-center gap-3">
+          <div class="p-2 rounded-xl bg-amber-50 dark:bg-amber-950/40"><KeyRound class="w-5 h-5 text-amber-600" /></div>
+          <div>
+            <h2 class="text-lg font-bold text-slate-900 dark:text-white">Password reset</h2>
+            <p class="text-xs text-slate-500">{{ resetResult.name }} · {{ resetResult.email }}</p>
+          </div>
+        </div>
+        <div>
+          <p class="text-xs text-slate-500 mb-1.5">Temporary password</p>
+          <div class="flex items-center gap-2">
+            <code class="flex-1 px-3 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-base font-mono tracking-wide select-all">{{ resetResult.password }}</code>
+            <button class="flex items-center gap-1 px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-semibold" @click="copyPassword">
+              <Copy class="w-3.5 h-3.5" /> {{ copied ? 'Copied' : 'Copy' }}
+            </button>
+          </div>
+        </div>
+        <ul class="text-xs text-slate-600 dark:text-slate-300 space-y-1 list-disc pl-4">
+          <li v-if="resetResult.emailSent">Also emailed to {{ resetResult.email }}.</li>
+          <li v-else class="text-amber-700">The email could not be sent — share this password with the employee directly.</li>
+          <li>They must set a new password when they sign in. It expires in 7 days.</li>
+          <li>This password won't be shown again.</li>
+        </ul>
+        <div class="flex justify-end">
+          <button class="px-5 py-2.5 rounded-xl bg-[#1989d9] text-white text-xs font-semibold" @click="resetResult = null">Done</button>
+        </div>
       </div>
     </div>
 
