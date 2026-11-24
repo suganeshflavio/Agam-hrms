@@ -131,6 +131,35 @@ describe('Screens backed by the API', () => {
     expect(wrapper.text()).toContain('1 day(s) marked')
   })
 
+  it('lets an employee request regularization for a missed day', async () => {
+    const month = thisMonth()
+    const days = Array.from({ length: 28 }, (_, i) => ({
+      date: `${month}-${String(i + 1).padStart(2, '0')}`,
+      status: i === 0 ? 'absent' : 'upcoming',
+    }))
+    const fetchMock = stubBackend({
+      'GET /app/attendance/calendar': { month, employeeId: '11', days, summary: { absent: 1 } },
+      'POST /app/regularizations': { id: '1', employeeId: '11', employeeName: 'Tester', date: `${month}-01`, actualCheckIn: '', actualCheckOut: '', correctedCheckIn: '09:00 AM', correctedCheckOut: '06:00 PM', reason: 'Forgot to punch', status: 'Pending' },
+    })
+    signIn(makeUser('General Employee'))
+    wrapper = await mountAt('/attendance')
+
+    await wrapper.find('button.bg-rose-500').trigger('click')
+    await settle()
+    const open = wrapper.findAll('button').find((b) => b.text().includes('Request regularization'))
+    expect(open).toBeDefined()
+    await open!.trigger('click')
+    await settle()
+    await wrapper.find('textarea').setValue('Forgot to punch')
+    await wrapper.find('form').trigger('submit')
+    await settle()
+
+    const post = fetchMock.mock.calls.find(([url, init]) => String(url).includes('/app/regularizations') && (init as RequestInit)?.method === 'POST')
+    expect(post).toBeDefined()
+    expect(JSON.parse(String((post![1] as RequestInit).body))).toMatchObject({ date: `${month}-01`, correctedCheckIn: '09:00', correctedCheckOut: '18:00', reason: 'Forgot to punch' })
+    expect(wrapper.text()).toContain('Request sent for approval')
+  })
+
   it('shows leave policy and holiday management only to admins', async () => {
     stubBackend()
     signIn(makeUser('Super Admin'))

@@ -16,12 +16,14 @@ import {
   Users,
   Pencil,
   Trash2,
+  ClipboardCheck,
 } from '@lucide/vue'
 import { hrmsApi } from '@/redux/api/hrmsApi'
 import { useApiQuery, useApiMutation, useAppSelector } from '@/redux/vueAdapter'
-import type { AttendanceRecord, Shift, Employee } from '@/types/hrms'
+import type { AttendanceRecord, Shift, Employee, RegularizationRequest } from '@/types/hrms'
 import DepartmentAttendanceRegister from '@/components/attendance/DepartmentAttendanceRegister.vue'
 import AttendanceCalendar from '@/components/attendance/AttendanceCalendar.vue'
+import RegularizationRequests from '@/components/attendance/RegularizationRequests.vue'
 import { usePermissions } from '@/composables/usePermissions'
 
 const currentUser = useAppSelector((state) => state.auth.user)
@@ -147,8 +149,13 @@ const handleDeleteShift = async (s: Shift) => {
   }
 }
 
+// Regularization requests: own, plus team (managers) / everyone (Super Admin, HR).
+const { data: regularizations } = useApiQuery<RegularizationRequest[]>(hrmsApi.endpoints.getRegularizations)
+const showRegularizations = computed(() => hasEmployeeProfile.value || showRegister.value)
+const regularizationsWaiting = computed(() => (regularizations.value || []).filter((r) => r.canAct && r.status === 'Pending').length)
+
 // Tabs & State
-const activeTab = ref<'daily' | 'calendar' | 'shifts'>(showRegister.value ? 'daily' : 'calendar')
+const activeTab = ref<'daily' | 'calendar' | 'regularizations' | 'shifts'>(showRegister.value ? 'daily' : 'calendar')
 watch(showRegister, (show) => {
   if (!show && activeTab.value !== 'calendar') activeTab.value = 'calendar'
 })
@@ -331,6 +338,21 @@ const handleClockAction = async () => {
         <span>{{ registerLabel }}</span>
       </button>
 
+      <button
+        v-if="showRegularizations"
+        @click="activeTab = 'regularizations'"
+        :class="[
+          'px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer whitespace-nowrap',
+          activeTab === 'regularizations'
+            ? 'bg-[#1989d9] text-white shadow-sm shadow-[#1989d9]/30'
+            : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800'
+        ]"
+      >
+        <ClipboardCheck class="w-4 h-4" />
+        <span>Regularizations</span>
+        <span v-if="regularizationsWaiting" class="min-w-5 h-5 px-1.5 rounded-full bg-amber-400 text-white text-[10px] flex items-center justify-center">{{ regularizationsWaiting }}</span>
+      </button>
+
       <!-- Shift Templates: Only Admin can see -->
       <button
         v-if="canViewAll"
@@ -350,6 +372,9 @@ const handleClockAction = async () => {
     <!-- TAB 1: Super Admin / HR see a department-wise register; everyone else sees their own calendar -->
     <div v-if="activeTab === 'daily' && showRegister">
       <DepartmentAttendanceRegister />
+    </div>
+    <div v-if="activeTab === 'regularizations' && showRegularizations">
+      <RegularizationRequests />
     </div>
     <div v-if="activeTab === 'calendar'">
       <AttendanceCalendar v-if="hasEmployeeProfile" />

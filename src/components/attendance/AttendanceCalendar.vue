@@ -11,11 +11,16 @@ import {
   Plane,
   Timer,
   XCircle,
+  FilePenLine,
+  Hourglass,
 } from '@lucide/vue'
 import { hrmsApi } from '@/redux/api/hrmsApi'
-import { useApiQuery } from '@/redux/vueAdapter'
-import type { AttendanceCalendar, AttendanceDayStatus } from '@/types/hrms'
+import { useApiMutation, useApiQuery } from '@/redux/vueAdapter'
+import { usePermissions } from '@/composables/usePermissions'
+import type { ApiError } from '@/services/apiClient'
+import type { AttendanceCalendar, AttendanceDayStatus, RegularizationRequest } from '@/types/hrms'
 import { STATUS_BADGE, STATUS_LABELS } from './statusStyles'
+import { to24h } from './time'
 
 // A month of attendance: green = attendance marked, red = missed.
 const props = withDefaults(defineProps<{ employeeId?: string; title?: string }>(), { employeeId: undefined, title: 'My Attendance' })
@@ -116,6 +121,7 @@ const legend = [
   { label: 'Leave', cls: 'bg-violet-200 dark:bg-violet-800' },
   { label: 'Holiday', cls: 'bg-sky-200 dark:bg-sky-800' },
   { label: 'Weekly off', cls: 'bg-slate-200 dark:bg-slate-700' },
+  { label: 'Regularization pending', cls: 'bg-amber-400 rounded-full' },
 ]
 
 const weekdays = [
@@ -129,6 +135,66 @@ const weekdays = [
 ]
 
 const selectedDay = computed(() => calendar.value?.days.find((d) => d.date === selectedDate.value))
+
+// ---- Regularization: ask the reporting authority to correct a day's attendance
+const { user } = usePermissions()
+const myId = computed(() => props.employeeId || user.value?.employeeId || '')
+const ownCalendar = computed(() => !props.employeeId || props.employeeId === user.value?.employeeId)
+const { data: regularizations } = useApiQuery<RegularizationRequest[]>(hrmsApi.endpoints.getRegularizations)
+const [submitRegularization, { isLoading: submitting }] = useApiMutation(hrmsApi.endpoints.submitRegularization)
+
+const myRequests = computed(() => (regularizations.value || []).filter((r) => r.employeeId === myId.value))
+const pendingDates = computed(() => new Set(myRequests.value.filter((r) => r.status === 'Pending').map((r) => r.date)))
+const requestForDay = computed(() =>
+  myRequests.value.filter((r) => r.date === selectedDate.value).sort((a, b) => Number(b.id) - Number(a.id))[0],
+)
+const REGULARIZABLE: AttendanceDayStatus[] = ['absent', 'not_marked', 'present', 'late', 'half_day']
+const canRequest = computed(
+  () =>
+    ownCalendar.value &&
+    !!selectedDay.value &&
+    selectedDay.value.date <= todayIso &&
+    REGULARIZABLE.includes(selectedDay.value.status) &&
+    !pendingDates.value.has(selectedDay.value.date),
+)
+
+const showForm = ref(false)
+const form = ref({ checkIn: '', checkOut: '', reason: '' })
+const formError = ref('')
+const formDone = ref('')
+const openForm = () => {
+  const day = selectedDay.value
+  form.value = { checkIn: to24h(day?.checkIn) || '09:00', checkOut: to24h(day?.checkOut) || '18:00', reason: '' }
+  formError.value = ''
+  formDone.value = ''
+  showForm.value = true
+}
+watch(selectedDate, () => {
+  showForm.value = false
+  formDone.value = ''
+})
+const submitForm = async () => {
+  const day = selectedDay.value
+  if (!day) return
+  formError.value = ''
+  if (!form.value.checkIn && !form.value.checkOut) return (formError.value = 'Enter the correct check-in and/or check-out time')
+  if (form.value.checkIn && form.value.checkOut && form.value.checkOut <= form.value.checkIn)
+    return (formError.value = 'Check-out must be after check-in')
+  if (form.value.reason.trim().length < 5) return (formError.value = 'Please give a reason (at least 5 characters)')
+  const { error: err } = await submitRegularization({
+    employeeId: myId.value,
+    employeeName: user.value?.name || '',
+    date: day.date,
+    actualCheckIn: day.checkIn || '',
+    actualCheckOut: day.checkOut || '',
+    correctedCheckIn: form.value.checkIn || undefined,
+    correctedCheckOut: form.value.checkOut || undefined,
+    reason: form.value.reason.trim(),
+  })
+  if (err) return (formError.value = (err as ApiError).data || 'Could not send the request')
+  showForm.value = false
+  formDone.value = 'Request sent for approval. The day updates once it is approved.'
+}
 const selectedLabel = computed(() =>
   selectedDay.value
     ? new Date(`${selectedDay.value.date}T00:00:00`).toLocaleDateString('en-US', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
@@ -246,6 +312,12 @@ const tooltip = (d: Day) =>
                   >Today</span>
                 </div>
 
+                <span
+                  v-if="pendingDates.has(cell.date)"
+                  class="absolute top-1 right-1 w-2 h-2 rounded-full bg-amber-400 ring-2 ring-white dark:ring-slate-900"
+                  title="Regularization pending"
+                ></span>
+
                 <!-- Mobile: a small dot for late/half day -->
                 <span v-if="cell.status === 'late' || cell.status === 'half_day'" class="sm:hidden mt-0.5 w-1 h-1 rounded-full bg-white"></span>
 
@@ -313,8 +385,60 @@ const tooltip = (d: Day) =>
               You haven't clocked in today yet. Use “Clock In” above.
             </p>
             <p v-else-if="selectedDay.status === 'absent'" class="mt-4 text-[11px] text-rose-600 dark:text-rose-400">
-              No attendance recorded. Apply for leave or ask HR to regularize if this is wrong.
+              No attendance recorded. If this is wrong, request approval from your reporting authority.
             </p>
+
+            <!-- Regularization -->
+            <div v-if="requestForDay" class="mt-4 p-3 rounded-xl border text-[11px]"
+              :class="requestForDay.status === 'Pending' ? 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300'
+                : requestForDay.status === 'Approved' ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300'
+                : 'border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300'">
+              <p class="font-bold flex items-center gap-1.5">
+                <Hourglass v-if="requestForDay.status === 'Pending'" class="w-3.5 h-3.5" />
+                Regularization {{ requestForDay.status.toLowerCase() }}
+              </p>
+              <p class="mt-0.5 font-mono">{{ requestForDay.correctedCheckIn || '—' }} – {{ requestForDay.correctedCheckOut || '—' }}</p>
+            </div>
+            <p v-if="formDone" class="mt-3 text-[11px] font-semibold text-emerald-700 dark:text-emerald-400">{{ formDone }}</p>
+
+            <button
+              v-if="canRequest && !showForm"
+              class="mt-4 w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-xs font-bold bg-[#1989d9] text-white hover:bg-[#1478c0] shadow-sm shadow-[#1989d9]/30 cursor-pointer"
+              @click="openForm"
+            >
+              <FilePenLine class="w-4 h-4" />
+              {{ requestForDay?.status === 'Rejected' ? 'Request again' : 'Request regularization' }}
+            </button>
+
+            <form v-if="showForm" class="mt-4 space-y-3" @submit.prevent="submitForm">
+              <p class="text-[11px] font-bold uppercase tracking-wide text-slate-400">Correct attendance</p>
+              <div class="grid grid-cols-2 gap-2">
+                <label class="text-[11px] font-semibold text-slate-600 dark:text-slate-300">
+                  Check in
+                  <input v-model="form.checkIn" type="time"
+                    class="mt-1 w-full px-2.5 py-2 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs font-mono cursor-pointer focus:outline-hidden focus:border-[#1989d9]" />
+                </label>
+                <label class="text-[11px] font-semibold text-slate-600 dark:text-slate-300">
+                  Check out
+                  <input v-model="form.checkOut" type="time"
+                    class="mt-1 w-full px-2.5 py-2 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs font-mono cursor-pointer focus:outline-hidden focus:border-[#1989d9]" />
+                </label>
+              </div>
+              <label class="block text-[11px] font-semibold text-slate-600 dark:text-slate-300">
+                Reason
+                <textarea v-model="form.reason" rows="3" maxlength="500" placeholder="e.g. Forgot to clock out after the client meeting"
+                  class="mt-1 w-full px-2.5 py-2 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs focus:outline-hidden focus:border-[#1989d9] resize-none"></textarea>
+              </label>
+              <p v-if="formError" class="text-[11px] font-semibold text-rose-600">{{ formError }}</p>
+              <div class="flex gap-2">
+                <button type="button" class="flex-1 px-3 py-2 rounded-lg text-xs font-bold border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer" @click="showForm = false">
+                  Cancel
+                </button>
+                <button type="submit" :disabled="submitting" class="flex-1 px-3 py-2 rounded-lg text-xs font-bold bg-[#1989d9] text-white hover:bg-[#1478c0] disabled:opacity-50 cursor-pointer">
+                  {{ submitting ? 'Sending…' : 'Send for approval' }}
+                </button>
+              </div>
+            </form>
           </template>
           <p v-else class="text-xs text-slate-500 dark:text-slate-400">Select a day to see its details.</p>
         </aside>

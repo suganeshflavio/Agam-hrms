@@ -36,7 +36,7 @@ const submit = async () => {
       <p class="text-sm text-slate-600 dark:text-slate-300">
         If an account exists for <strong>{{ email }}</strong>, a reset link is on its way. The link is valid for 15 minutes.
       </p>
-      <p class="text-xs text-slate-500">Didn't get it? Check your spam folder or contact your HR team.</p>
+      <p class="text-xs text-slate-500">Didn't get it? Check your spam folder or contact your administrator.</p>
     </div>
 
     <form v-else class="space-y-4" @submit.prevent="submit">
