@@ -38,6 +38,8 @@ export interface AuthUser {
   name: string
   email: string
   role: SystemRoleType
+  /** Whose records the user can reach: all (Super Admin/HR), team (managers), own, none. */
+  dataScope?: 'all' | 'team' | 'own' | 'none'
   department: string
   designation: string
   avatar?: string
@@ -45,6 +47,11 @@ export interface AuthUser {
   zohoId?: string
   zohoAccountType?: string
   permissions: UserPermission[]
+  userId?: string
+  companyName?: string
+  companyCode?: string
+  /** True after HR creates the account; the user must set their own password. */
+  mustChangePassword?: boolean
 }
 
 export interface AuthState {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import {
   Users,
@@ -14,20 +14,19 @@ import {
   Fingerprint,
 } from '@lucide/vue'
 import { hrmsApi } from '@/redux/api/hrmsApi'
-import { useApiQuery, useApiMutation, useAppSelector } from '@/redux/vueAdapter'
+import { useApiQuery, useApiMutation } from '@/redux/vueAdapter'
+import { usePermissions } from '@/composables/usePermissions'
 import type { HRMSStats, LeaveRequest, AttendanceRecord, Employee } from '@/types/hrms'
 
-const authUser = useAppSelector((state) => state.auth.user)
-const isSuperAdmin = computed(() => {
-  const r = (authUser.value?.role || '').toLowerCase()
-  return !r || r.includes('admin') || r.includes('hr') || r === 'super admin' || r === 'hr manager'
-})
-const isDepartmentManager = computed(() => {
-  const r = (authUser.value?.role || '').toLowerCase()
-  return r.includes('manager') && !isSuperAdmin.value
-})
-const currentUserId = computed(() => authUser.value?.employeeId || authUser.value?.id || 'emp-2')
-const currentUserName = computed(() => authUser.value?.name || 'Priya Sharma')
+// Access follows HR Administration -> Roles & Permissions.
+const { user: authUser, can, hasEmployeeProfile } = usePermissions()
+// Whose records the backend returns: all (Super Admin/HR), team (managers), own (General Employee).
+const canViewOrganization = computed(() => authUser.value?.dataScope === 'all')
+const canViewAllAttendance = computed(() => can('attendance', 'view'))
+const canViewAllLeaves = computed(() => can('leaves', 'view'))
+// Logins without an employee profile cannot punch attendance.
+const currentUserId = computed(() => authUser.value?.employeeId || '')
+const currentUserName = computed(() => authUser.value?.name || '')
 
 // Fetch stats, leaves, attendance, and employees via Redux Toolkit API
 const { data: stats } = useApiQuery<HRMSStats>(hrmsApi.endpoints.getStats)
@@ -43,52 +42,31 @@ const [recordAttendance, { isLoading: punchingAttendance }] = useApiMutation(
   hrmsApi.endpoints.recordAttendance
 )
 
-// Role-Based Headcount & Presence Metrics
+// The backend already limits the employee list to the user's scope (own, or own + team).
+const teamIds = computed(() => new Set((employees.value || []).map((e) => e.id)))
+
+// Headcount & Presence Metrics
 const scopedHeadcount = computed(() => {
-  if (isSuperAdmin.value) return stats.value?.totalEmployees ?? (employees.value || []).length ?? '...'
-  const dept = (authUser.value?.department || '').toLowerCase()
-  const count = (employees.value || []).filter((e) => dept && (e.department || '').toLowerCase() === dept).length
-  return count > 0 ? count : (employees.value || []).length
+  if (canViewOrganization.value) return stats.value?.totalEmployees ?? (employees.value ? employees.value.length : '—')
+  return (employees.value || []).filter((e) => teamIds.value.has(e.id)).length
 })
 
 const scopedActive = computed(() => {
-  if (isSuperAdmin.value) return stats.value?.activeEmployees ?? (employees.value || []).filter((e) => e.status === 'Active').length ?? 0
-  const dept = (authUser.value?.department || '').toLowerCase()
-  const count = (employees.value || []).filter((e) => dept && (e.department || '').toLowerCase() === dept && e.status === 'Active').length
-  return count > 0 ? count : (employees.value || []).filter((e) => e.status === 'Active').length
+  if (canViewOrganization.value) return stats.value?.activeEmployees ?? (employees.value || []).filter((e) => e.status === 'Active').length
+  return (employees.value || []).filter((e) => teamIds.value.has(e.id) && e.status === 'Active').length
 })
 
-// Daily Attendance Register: Role-scoped, sorted by latest date, top 5 records
+// Daily Attendance Register: latest 5 records the user may see
 const dailyAttendanceRegister = computed(() => {
   const all = attendance.value || []
-  let list = all
-  if (!isSuperAdmin.value) {
-    const myDept = (authUser.value?.department || '').toLowerCase()
-    if (isDepartmentManager.value && myDept) {
-      const deptEmpIds = new Set(
-        (employees.value || [])
-          .filter((e) => (e.department || '').toLowerCase() === myDept)
-          .map((e) => e.id)
-      )
-      list = all.filter((a) => deptEmpIds.has(a.employeeId))
-    } else {
-      list = all.filter((a) => a.employeeId === currentUserId.value)
-    }
-  }
+  const list = canViewAllAttendance.value ? all : all.filter((a) => teamIds.value.has(a.employeeId))
   return [...list].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0, 5)
 })
 
-// Leave Management Top 5: Role-scoped, prioritizing pending requests, then latest applied
+// Leave Management Top 5: pending first, then latest applied
 const top5Leaves = computed(() => {
   const all = leaves.value || []
-  let list = all
-  if (!isSuperAdmin.value) {
-    if (isDepartmentManager.value) {
-      list = all.filter((l) => l.department === authUser.value?.department)
-    } else {
-      list = all.filter((l) => l.employeeId === currentUserId.value)
-    }
-  }
+  const list = canViewAllLeaves.value ? all : all.filter((l) => teamIds.value.has(l.employeeId))
 
   return [...list]
     .sort((a, b) => {
@@ -106,11 +84,21 @@ const userAttendanceToday = computed(() => {
   )
 })
 
+const punchError = ref('')
 const handlePunch = async () => {
-  await recordAttendance({
+  punchError.value = ''
+  if (!hasEmployeeProfile.value) {
+    punchError.value = "Your login isn't linked to an employee profile. Add yourself as an employee with your login email."
+    return
+  }
+  const { error } = await recordAttendance({
     employeeId: currentUserId.value,
     employeeName: currentUserName.value,
   })
+  if (error) {
+    punchError.value = error?.data || 'Could not record attendance'
+    setTimeout(() => (punchError.value = ''), 6000)
+  }
 }
 
 const handleApprove = async (id: string) => {
@@ -136,10 +124,10 @@ const handleReject = async (id: string) => {
       <div class="relative z-10">
         <div class="inline-flex items-center gap-2 px-2.5 py-0.5 rounded-full bg-white/15 backdrop-blur-xs text-[11px] font-semibold text-sky-100 mb-2 border border-white/20">
           <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-          <span>{{ isSuperAdmin ? 'Full Organization View' : `${authUser?.department} Department Hub` }}</span>
+          <span>{{ canViewOrganization ? 'Full Organization View' : 'My Team Hub' }}</span>
         </div>
         <h1 class="text-2xl md:text-3xl font-extrabold tracking-tight">
-          Welcome back, {{ currentUserName }} 👋
+          Welcome back{{ currentUserName ? `, ${currentUserName}` : '' }} 👋
         </h1>
         <p class="text-sky-100 text-sm mt-1 max-w-xl">
           Here is your internal HR operational summary for today, {{ new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' }) }}.
@@ -156,7 +144,8 @@ const handleReject = async (id: string) => {
         </div>
         <button
           @click="handlePunch"
-          :disabled="punchingAttendance || (userAttendanceToday && !!userAttendanceToday.checkOut)"
+          :disabled="!hasEmployeeProfile || punchingAttendance || (userAttendanceToday && !!userAttendanceToday.checkOut)"
+          :title="hasEmployeeProfile ? '' : 'Your login isn\'t linked to an employee profile. Add yourself as an employee with your login email.'"
           class="px-4 py-2 rounded-xl bg-white text-[#044663] font-bold text-xs shadow-md hover:bg-sky-50 active:scale-95 transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
         >
           <span v-if="punchingAttendance">Syncing...</span>
@@ -175,7 +164,7 @@ const handleReject = async (id: string) => {
         </div>
         <div>
           <p class="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-            {{ isSuperAdmin ? 'Total Headcount' : 'Team Members' }}
+            {{ canViewOrganization ? 'Total Headcount' : 'Team Members' }}
           </p>
           <p class="text-2xl font-bold text-slate-900 dark:text-white mt-0.5">
             {{ scopedHeadcount }}
@@ -245,7 +234,7 @@ const handleReject = async (id: string) => {
                   </span>
                 </div>
                 <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                  Live punch logs & biometric presence records
+                  Latest punch logs and presence records
                 </p>
               </div>
             </div>
@@ -412,9 +401,9 @@ const handleReject = async (id: string) => {
                 </div>
               </div>
 
-              <!-- Quick Approval Actions for Super Admin & Department Manager -->
+              <!-- Quick Approval Actions: only when the signed-in user can act on this request -->
               <div
-                v-if="req.status === 'Pending' && (isSuperAdmin || isDepartmentManager)"
+                v-if="req.status === 'Pending' && req.canAct"
                 class="flex items-center gap-1.5 shrink-0 self-end sm:self-center"
               >
                 <button
@@ -448,6 +437,10 @@ const handleReject = async (id: string) => {
           </RouterLink>
         </div>
       </div>
+    </div>
+    <!-- Clock-in errors from the server -->
+    <div v-if="punchError" class="fixed bottom-6 right-6 z-50 max-w-md px-4 py-3 rounded-xl bg-rose-600 text-white text-sm shadow-lg" role="alert">
+      {{ punchError }}
     </div>
   </div>
 </template>

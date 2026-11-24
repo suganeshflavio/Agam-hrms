@@ -1,5 +1,25 @@
 # agam-hrms
 
+## Backend (Core HRMS)
+
+The UI talks to the Core HRMS Rails API (`../core_hrms`). All data access goes through
+`src/redux/api/hrmsApi.ts`, which calls `/api/v1/app/*` via `src/services/apiClient.ts`.
+
+```sh
+# in ../core_hrms
+docker compose up -d && bin/rails db:prepare && bin/rails hrms:demo:agam && bin/rails server
+# here
+cp .env.example .env   # proxy target for the Rails API
+npm run dev
+```
+
+Log in with `priya.sharma@agam.internal` / `Password@2026` (or the demo buttons).
+
+- All data comes from the backend; there is no offline/mock mode.
+- Sessions refresh automatically; a 401 returns to the login screen.
+- The role switcher in the header only previews the UI — the backend enforces the user's real permissions.
+- Zoho sign-in: the code is exchanged by the backend (`ZOHO_CLIENT_SECRET` lives there). Do not put a client secret in `VITE_*` variables — they are bundled into the browser.
+
 This template should help get you started developing with Vue 3 in Vite.
 
 ## Recommended IDE Setup

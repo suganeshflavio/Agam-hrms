@@ -2,11 +2,11 @@
 import { ref, computed } from 'vue'
 import { useForm } from 'vee-validate'
 import { toTypedSchema } from '@vee-validate/zod'
+import { z } from 'zod'
 import {
   CalendarPlus,
   CheckCircle2,
   XCircle,
-  Clock,
   CalendarCheck2,
   X,
   Calendar,
@@ -21,29 +21,38 @@ import {
 } from '@lucide/vue'
 import { hrmsApi } from '@/redux/api/hrmsApi'
 import { useApiQuery, useApiMutation, useAppSelector } from '@/redux/vueAdapter'
-import { leaveSchema, type LeaveFormValues } from '@/schemas/leaveSchema'
-import type { LeaveRequest, Employee, LeaveTypePolicy, Holiday } from '@/types/hrms'
+import type { LeaveRequest, Employee, LeaveTypePolicy, Holiday, LeaveBalance } from '@/types/hrms'
 import FormInput from '@/components/forms/FormInput.vue'
 import FormSelect from '@/components/forms/FormSelect.vue'
 import FormTextarea from '@/components/forms/FormTextarea.vue'
+import { usePermissions } from '@/composables/usePermissions'
 
 const currentUser = useAppSelector((state) => state.auth.user)
-const isSuperAdmin = computed(() => {
-  const r = (currentUser.value?.role || '').toLowerCase()
-  return !r || r.includes('admin') || r.includes('hr') || r === 'super admin' || r === 'hr manager'
-})
-const isDepartmentManager = computed(() => {
-  const r = (currentUser.value?.role || '').toLowerCase()
-  return r.includes('manager') && !isSuperAdmin.value
-})
-const canApprove = computed(() => isSuperAdmin.value || isDepartmentManager.value)
-const currentUserId = computed(() => currentUser.value?.employeeId || currentUser.value?.id || 'emp-2')
+// Access from Roles & Permissions: Leave Management row. Approve/Reject
+// buttons follow each request's `canAct` (set by the approval workflow).
+const { can } = usePermissions()
+const canViewAllLeaves = computed(() => can('leaves', 'view'))
+const canCreateLeaveSetup = computed(() => can('leaves', 'create'))
+const canEditLeaveSetup = computed(() => can('leaves', 'edit'))
+const canDeleteLeaveSetup = computed(() => can('leaves', 'delete'))
+// Applying on behalf of other employees needs Write on Leave Management.
+const canApplyForOthers = computed(() => can('leaves', 'create'))
+// Signed-in user's employee record id (empty for admin-only logins).
+const currentUserId = computed(() => currentUser.value?.employeeId || '')
+const NO_PROFILE_MESSAGE = "Your login isn't linked to an employee profile."
 
 // Redux Queries & Mutations
 const { data: leaves } = useApiQuery<LeaveRequest[]>(hrmsApi.endpoints.getLeaveRequests)
 const { data: employees } = useApiQuery<Employee[]>(hrmsApi.endpoints.getEmployees)
 const { data: policies } = useApiQuery<LeaveTypePolicy[]>(hrmsApi.endpoints.getLeavePolicies)
 const { data: holidays } = useApiQuery<Holiday[]>(hrmsApi.endpoints.getHolidays)
+const { data: leaveBalances } = useApiQuery<LeaveBalance[]>(hrmsApi.endpoints.getLeaveBalances)
+
+// Calendar year shown on the holiday tab: from the holidays themselves, else the current year.
+const holidayYears = computed(() => {
+  const years = new Set((holidays.value || []).map((h) => (h.date || '').slice(0, 4)).filter(Boolean))
+  return years.size ? Array.from(years).sort().join(', ') : String(new Date().getFullYear())
+})
 
 const [applyLeave, { isLoading: isApplying }] = useApiMutation(hrmsApi.endpoints.applyLeave)
 const [updateLeaveStatus] = useApiMutation(hrmsApi.endpoints.updateLeaveStatus)
@@ -79,20 +88,29 @@ const employeeOptions = computed(() => {
   }))
 })
 
-const leaveTypeOptions = [
-  { value: 'Annual', label: 'Annual / Paid Leave' },
-  { value: 'Sick', label: 'Sick / Medical Leave' },
-  { value: 'Casual', label: 'Casual Leave' },
-  { value: 'Maternity/Paternity', label: 'Maternity / Paternity Leave' },
-  { value: 'Unpaid', label: 'Unpaid Leave' },
-]
+// Leave types come from the company's leave policies.
+const leaveTypeOptions = computed(() => (policies.value || []).map((p) => ({ value: p.name, label: p.name })))
 
 // Form Setup with VeeValidate + Zod
+const leaveFormSchema = z
+  .object({
+    employeeId: z.string().min(1, 'Please select an employee'),
+    leaveType: z.string().min(1, 'Please select a leave type'),
+    startDate: z.string().min(1, 'Start date is required'),
+    endDate: z.string().min(1, 'End date is required'),
+    reason: z.string().min(8, 'Reason must be at least 8 characters explaining the leave'),
+  })
+  .refine((data) => new Date(data.endDate) >= new Date(data.startDate), {
+    message: 'End date cannot be earlier than start date',
+    path: ['endDate'],
+  })
+type LeaveFormValues = z.infer<typeof leaveFormSchema>
+
 const { handleSubmit, resetForm } = useForm<LeaveFormValues>({
-  validationSchema: toTypedSchema(leaveSchema),
+  validationSchema: toTypedSchema(leaveFormSchema),
   initialValues: {
     employeeId: '',
-    leaveType: 'Annual',
+    leaveType: '',
     startDate: new Date().toISOString().split('T')[0],
     endDate: new Date().toISOString().split('T')[0],
     reason: '',
@@ -100,11 +118,15 @@ const { handleSubmit, resetForm } = useForm<LeaveFormValues>({
 })
 
 const openRequestLeaveModal = () => {
-  const initialEmpId = isSuperAdmin.value ? '' : currentUserId.value
+  if (!canApplyForOthers.value && !currentUserId.value) {
+    showNotification(NO_PROFILE_MESSAGE)
+    return
+  }
+  const initialEmpId = canApplyForOthers.value ? '' : currentUserId.value
   resetForm({
     values: {
       employeeId: initialEmpId,
-      leaveType: 'Annual',
+      leaveType: '',
       startDate: new Date().toISOString().split('T')[0],
       endDate: new Date().toISOString().split('T')[0],
       reason: '',
@@ -116,63 +138,42 @@ const openRequestLeaveModal = () => {
 const onSubmit = handleSubmit(async (values) => {
   const empId = values.employeeId || currentUserId.value
   const emp = (employees.value || []).find((e) => e.id === empId)
+  if (!emp) {
+    showNotification(empId ? 'Select a valid employee' : NO_PROFILE_MESSAGE)
+    return
+  }
   const start = new Date(values.startDate)
   const end = new Date(values.endDate)
   const diffTime = Math.abs(end.getTime() - start.getTime())
   const days = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1
 
-  await applyLeave({
+  const { error } = await applyLeave({
     employeeId: empId,
-    employeeName: emp ? `${emp.firstName} ${emp.lastName}` : (currentUser.value?.name || 'Employee'),
-    department: emp ? emp.department : (currentUser.value?.department || 'General'),
-    leaveType: values.leaveType,
+    employeeName: `${emp.firstName} ${emp.lastName}`,
+    department: emp.department,
+    leaveType: values.leaveType as LeaveRequest['leaveType'],
     startDate: values.startDate,
     endDate: values.endDate,
     daysCount: days,
     reason: values.reason,
   })
+  if (error) {
+    showNotification(error?.data || 'The leave request could not be submitted')
+    return
+  }
 
   showNotification('Leave request submitted successfully for approval!')
   resetForm()
   isModalOpen.value = false
 })
 
-// Role-Based Leaves Scoping:
-// Super Admin sees all company leaves; Manager sees department/team leaves; Employee sees personal leaves only.
+// Leave Management Read = every request the backend returns; otherwise the
+// user's own requests plus any they can approve (e.g. their team's).
 const scopedLeaves = computed(() => {
   const all = leaves.value || []
-  if (isSuperAdmin.value) return all
-
-  if (isDepartmentManager.value) {
-    const dept = (currentUser.value?.department || '').toLowerCase()
-    const managerName = (currentUser.value?.name || '').toLowerCase()
-    const myId = currentUserId.value
-
-    const teamEmployees = (employees.value || []).filter(
-      (e) =>
-        e.id === myId ||
-        (dept && (e.department || '').toLowerCase() === dept) ||
-        (managerName && (e.reportingManagerName || '').toLowerCase() === managerName)
-    )
-    const teamEmpIds = new Set(teamEmployees.map((e) => e.id))
-    const teamNames = new Set(teamEmployees.map((e) => `${e.firstName || ''} ${e.lastName || ''}`.trim().toLowerCase()))
-
-    return all.filter(
-      (l) =>
-        teamEmpIds.has(l.employeeId) ||
-        teamNames.has((l.employeeName || '').trim().toLowerCase()) ||
-        l.employeeId === myId
-    )
-  }
-
-  // General Employee: ONLY personal leave applications
+  if (canViewAllLeaves.value) return all
   const myId = currentUserId.value
-  const myName = (currentUser.value?.name || '').trim().toLowerCase()
-  return all.filter(
-    (l) =>
-      l.employeeId === myId ||
-      (l.employeeName || '').trim().toLowerCase() === myName
-  )
+  return all.filter((l) => (myId && l.employeeId === myId) || l.canAct)
 })
 
 const filteredLeaves = computed(() => {
@@ -181,11 +182,15 @@ const filteredLeaves = computed(() => {
 })
 
 const handleStatusChange = async (id: string, status: 'Approved' | 'Rejected') => {
-  if (!canApprove.value) {
-    showNotification('Access Denied: Only Managers and Super Admins can approve leaves.')
+  if (!(leaves.value || []).find((l) => l.id === id)?.canAct) {
+    showNotification('You are not an approver for this leave request.')
     return
   }
-  await updateLeaveStatus({ id, status })
+  const { error } = await updateLeaveStatus({ id, status })
+  if (error) {
+    showNotification(error?.data || 'The leave request could not be updated')
+    return
+  }
   showNotification(`Leave request marked as ${status}`)
 }
 
@@ -201,21 +206,21 @@ const isEditingPolicy = ref(false)
 const editingPolicyId = ref<string | null>(null)
 const policyForm = ref({
   name: '',
-  totalAllowedPerYear: 15,
-  maxCarryForwardDays: 5,
+  totalAllowedPerYear: 0,
+  maxCarryForwardDays: 0,
   accrualFrequency: 'Monthly' as 'Monthly' | 'Quarterly' | 'Yearly',
   paid: true,
   description: '',
 })
 
 const openAddPolicyModal = () => {
-  if (!isSuperAdmin.value) return
+  if (!canCreateLeaveSetup.value) return
   isEditingPolicy.value = false
   editingPolicyId.value = null
   policyForm.value = {
     name: '',
-    totalAllowedPerYear: 15,
-    maxCarryForwardDays: 5,
+    totalAllowedPerYear: 0,
+    maxCarryForwardDays: 0,
     accrualFrequency: 'Monthly',
     paid: true,
     description: '',
@@ -224,7 +229,7 @@ const openAddPolicyModal = () => {
 }
 
 const openEditPolicyModal = (p: LeaveTypePolicy) => {
-  if (!isSuperAdmin.value) return
+  if (!canEditLeaveSetup.value) return
   isEditingPolicy.value = true
   editingPolicyId.value = p.id
   policyForm.value = {
@@ -239,7 +244,7 @@ const openEditPolicyModal = (p: LeaveTypePolicy) => {
 }
 
 const handleSavePolicy = async () => {
-  if (!isSuperAdmin.value) return
+  if (!(isEditingPolicy.value ? canEditLeaveSetup.value : canCreateLeaveSetup.value)) return
   if (!policyForm.value.name.trim()) {
     showNotification('Policy name is required')
     return
@@ -275,7 +280,7 @@ const handleSavePolicy = async () => {
 }
 
 const handleDeletePolicy = async (p: LeaveTypePolicy) => {
-  if (!isSuperAdmin.value) return
+  if (!canDeleteLeaveSetup.value) return
   if (confirm(`Are you sure you want to delete leave policy "${p.name}"?`)) {
     await deleteLeavePolicy(p.id)
     showNotification(`Leave policy "${p.name}" deleted.`)
@@ -295,7 +300,7 @@ const holidayForm = ref({
 })
 
 const openAddHolidayModal = () => {
-  if (!isSuperAdmin.value) return
+  if (!canCreateLeaveSetup.value) return
   isEditingHoliday.value = false
   editingHolidayId.value = null
   holidayForm.value = {
@@ -307,7 +312,7 @@ const openAddHolidayModal = () => {
 }
 
 const openEditHolidayModal = (h: Holiday) => {
-  if (!isSuperAdmin.value) return
+  if (!canEditLeaveSetup.value) return
   isEditingHoliday.value = true
   editingHolidayId.value = h.id
   holidayForm.value = {
@@ -319,7 +324,7 @@ const openEditHolidayModal = (h: Holiday) => {
 }
 
 const handleSaveHoliday = async () => {
-  if (!isSuperAdmin.value) return
+  if (!(isEditingHoliday.value ? canEditLeaveSetup.value : canCreateLeaveSetup.value)) return
   if (!holidayForm.value.name.trim() || !holidayForm.value.date) {
     showNotification('Holiday name and date are required')
     return
@@ -350,7 +355,7 @@ const handleSaveHoliday = async () => {
 }
 
 const handleDeleteHoliday = async (h: Holiday) => {
-  if (!isSuperAdmin.value) return
+  if (!canDeleteLeaveSetup.value) return
   if (confirm(`Are you sure you want to delete holiday "${h.name}"?`)) {
     await deleteHoliday(h.id)
     showNotification(`Holiday "${h.name}" removed from calendar.`)
@@ -391,22 +396,26 @@ const handleDeleteHoliday = async (h: Holiday) => {
 
     <!-- Leave Balance KPI Cards -->
     <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-      <div class="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xs">
+      <!-- My leave balances (from the backend) -->
+      <div
+        v-for="balance in leaveBalances || []"
+        :key="balance.policyId"
+        class="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xs"
+      >
         <div class="flex items-center justify-between text-slate-400">
-          <span class="text-xs font-semibold">Annual Paid Leave</span>
+          <span class="text-xs font-semibold">{{ balance.leaveType }}</span>
           <CalendarCheck2 class="w-4 h-4 text-[#1989d9]" />
         </div>
-        <p class="text-2xl font-black text-slate-900 dark:text-white mt-1">15 Days</p>
-        <p class="text-[10px] text-slate-400 mt-0.5">5 days taken • 20 allowance</p>
+        <p class="text-2xl font-black text-slate-900 dark:text-white mt-1">{{ balance.available }} Days</p>
+        <p class="text-[10px] text-slate-400 mt-0.5">
+          {{ balance.used }} taken • {{ balance.allocated }} allowance<span v-if="balance.pending > 0"> • {{ balance.pending }} pending</span>
+        </p>
       </div>
-
-      <div class="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xs">
-        <div class="flex items-center justify-between text-slate-400">
-          <span class="text-xs font-semibold">Sick Leave</span>
-          <Clock class="w-4 h-4 text-emerald-500" />
-        </div>
-        <p class="text-2xl font-black text-emerald-600 dark:text-emerald-400 mt-1">10 Days</p>
-        <p class="text-[10px] text-slate-400 mt-0.5">2 days taken • 12 allowance</p>
+      <div
+        v-if="currentUserId && !(leaveBalances || []).length"
+        class="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xs flex items-center text-xs text-slate-400"
+      >
+        No leave balances yet
       </div>
 
       <div class="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xs">
@@ -424,7 +433,7 @@ const handleDeleteHoliday = async (h: Holiday) => {
           <CheckCircle2 class="w-4 h-4 text-[#1989d9]" />
         </div>
         <p class="text-2xl font-black text-[#0e6db3] dark:text-[#38a5e4] mt-1">{{ approvedCount }}</p>
-        <p class="text-[10px] text-slate-400 mt-0.5">This fiscal quarter</p>
+        <p class="text-[10px] text-slate-400 mt-0.5">All approved requests shown</p>
       </div>
     </div>
 
@@ -548,7 +557,7 @@ const handleDeleteHoliday = async (h: Holiday) => {
                   </span>
                 </td>
                 <td class="py-4 px-6 text-right">
-                  <div v-if="leave.status === 'Pending' && canApprove" class="flex items-center justify-end gap-1.5">
+                  <div v-if="leave.status === 'Pending' && leave.canAct" class="flex items-center justify-end gap-1.5">
                     <button
                       @click="handleStatusChange(leave.id, 'Approved')"
                       title="Approve Leave"
@@ -583,7 +592,7 @@ const handleDeleteHoliday = async (h: Holiday) => {
         </div>
 
         <button
-          v-if="isSuperAdmin"
+          v-if="canCreateLeaveSetup"
           @click="openAddPolicyModal"
           class="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-[#1989d9] hover:bg-[#0e6db3] text-white font-semibold text-xs shadow-md shadow-[#1989d9]/20 active:scale-95 transition-all cursor-pointer"
         >
@@ -606,8 +615,9 @@ const handleDeleteHoliday = async (h: Holiday) => {
               <span class="text-[11px] font-bold px-2 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400">
                 {{ policy.paid !== false && policy.name !== 'Unpaid' ? 'Paid Time-Off' : 'Unpaid' }}
               </span>
-              <div v-if="isSuperAdmin" class="flex items-center gap-1 opacity-80 group-hover:opacity-100 transition-opacity">
+              <div v-if="canEditLeaveSetup || canDeleteLeaveSetup" class="flex items-center gap-1 opacity-80 group-hover:opacity-100 transition-opacity">
                 <button
+                  v-if="canEditLeaveSetup"
                   @click="openEditPolicyModal(policy)"
                   title="Edit Policy"
                   class="p-1 rounded-lg text-slate-400 hover:text-[#0e6db3] dark:hover:text-[#38a5e4] hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
@@ -615,6 +625,7 @@ const handleDeleteHoliday = async (h: Holiday) => {
                   <Pencil class="w-3.5 h-3.5" />
                 </button>
                 <button
+                  v-if="canDeleteLeaveSetup"
                   @click="handleDeletePolicy(policy)"
                   title="Delete Policy"
                   class="p-1 rounded-lg text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
@@ -642,7 +653,7 @@ const handleDeleteHoliday = async (h: Holiday) => {
               <span class="font-bold text-slate-800 dark:text-slate-200">{{ policy.accrualFrequency }}</span>
             </div>
             <p class="text-[11px] text-slate-400 pt-1 border-t border-slate-100 dark:border-slate-800/60">
-              {{ policy.description || `${policy.name} leave entitlement according to corporate HR policy handbook.` }}
+              {{ policy.description || '—' }}
             </p>
           </div>
         </div>
@@ -653,12 +664,12 @@ const handleDeleteHoliday = async (h: Holiday) => {
     <div v-if="activeTab === 'holidays'" class="rounded-3xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xs overflow-hidden">
       <div class="p-6 border-b border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h2 class="text-base font-bold text-slate-900 dark:text-white">Corporate Holiday Calendar (2026)</h2>
+          <h2 class="text-base font-bold text-slate-900 dark:text-white">Corporate Holiday Calendar ({{ holidayYears }})</h2>
           <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Official company-wide non-working holidays and national observances</p>
         </div>
 
         <button
-          v-if="isSuperAdmin"
+          v-if="canCreateLeaveSetup"
           @click="openAddHolidayModal"
           class="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-[#1989d9] hover:bg-[#0e6db3] text-white font-semibold text-xs shadow-md shadow-[#1989d9]/20 active:scale-95 transition-all self-start sm:self-auto cursor-pointer"
         >
@@ -675,8 +686,8 @@ const handleDeleteHoliday = async (h: Holiday) => {
               <th class="py-3.5 px-6">Date</th>
               <th class="py-3.5 px-6">Day of Week</th>
               <th class="py-3.5 px-6">Classification</th>
-              <th class="py-3.5 px-6">Office Status</th>
-              <th v-if="isSuperAdmin" class="py-3.5 px-6 text-right">Actions</th>
+              <th class="py-3.5 px-6">Attendance</th>
+              <th v-if="canEditLeaveSetup || canDeleteLeaveSetup" class="py-3.5 px-6 text-right">Actions</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-slate-100 dark:divide-slate-800/80 text-sm">
@@ -700,13 +711,21 @@ const handleDeleteHoliday = async (h: Holiday) => {
                 </span>
               </td>
               <td class="py-4 px-6">
-                <span class="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400">
-                  Closed (Full Day)
+                <span
+                  :class="[
+                    'px-2.5 py-0.5 rounded-full text-[10px] font-bold',
+                    (holiday.type || '').toLowerCase() === 'optional'
+                      ? 'bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400'
+                      : 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400'
+                  ]"
+                >
+                  {{ (holiday.type || '').toLowerCase() === 'optional' ? 'Optional holiday' : 'Company holiday' }}
                 </span>
               </td>
-              <td v-if="isSuperAdmin" class="py-4 px-6 text-right">
+              <td v-if="canEditLeaveSetup || canDeleteLeaveSetup" class="py-4 px-6 text-right">
                 <div class="flex items-center justify-end gap-1.5">
                   <button
+                    v-if="canEditLeaveSetup"
                     @click="openEditHolidayModal(holiday)"
                     title="Edit Holiday"
                     class="p-1.5 rounded-lg text-slate-400 hover:text-[#0e6db3] dark:hover:text-[#38a5e4] hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
@@ -714,6 +733,7 @@ const handleDeleteHoliday = async (h: Holiday) => {
                     <Pencil class="w-3.5 h-3.5" />
                   </button>
                   <button
+                    v-if="canDeleteLeaveSetup"
                     @click="handleDeleteHoliday(holiday)"
                     title="Delete Holiday"
                     class="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
@@ -749,7 +769,7 @@ const handleDeleteHoliday = async (h: Holiday) => {
 
         <form @submit="onSubmit" class="space-y-4 mt-6">
           <FormSelect
-            v-if="isSuperAdmin"
+            v-if="canApplyForOthers"
             name="employeeId"
             label="Employee"
             :options="employeeOptions"

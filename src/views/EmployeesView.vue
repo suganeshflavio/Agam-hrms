@@ -1,18 +1,17 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { useForm } from 'vee-validate'
-import { toTypedSchema } from '@vee-validate/zod'
 import {
   UserPlus,
   Search,
   Filter,
   Trash2,
+  KeyRound,
+  Copy,
   Mail,
   Phone,
   Building,
   Briefcase,
-  X,
   CheckCircle2,
   Eye,
   Download,
@@ -21,38 +20,23 @@ import {
   ShieldCheck,
 } from '@lucide/vue'
 import { hrmsApi } from '@/redux/api/hrmsApi'
-import { useApiQuery, useApiMutation, useAppSelector } from '@/redux/vueAdapter'
-import type { Employee, Department, Branch, Grade } from '@/types/hrms'
-import { employeeSchema, type EmployeeFormValues } from '@/schemas/employeeSchema'
-import FormInput from '@/components/forms/FormInput.vue'
-import FormSelect from '@/components/forms/FormSelect.vue'
+import { useApiQuery, useApiMutation } from '@/redux/vueAdapter'
+import { apiRequest, type ApiError } from '@/services/apiClient'
+import type { Employee, Department, Branch } from '@/types/hrms'
+import AddEmployeeWizard from '@/components/employees/AddEmployeeWizard.vue'
+import { useMoney } from '@/composables/useMoney'
+import { usePermissions } from '@/composables/usePermissions'
 
 const router = useRouter()
-const currentUser = useAppSelector((state) => state.auth.user)
-const isSuperAdmin = computed(() => {
-  const r = (currentUser.value?.role || '').toLowerCase()
-  return (
-    !r ||
-    r.includes('admin') ||
-    r.includes('hr') ||
-    r === 'super admin' ||
-    r === 'hr manager' ||
-    r === 'hr super admin' ||
-    r === 'recruiter' ||
-    r === 'payroll specialist'
-  )
-})
-const isDepartmentManager = computed(() => {
-  const r = (currentUser.value?.role || '').toLowerCase()
-  return r.includes('manager') && !isSuperAdmin.value
-})
+const { formatMoney } = useMoney()
+// Access follows HR Administration -> Roles & Permissions ("Employee Onboarding" row).
+const { user: currentUser, can } = usePermissions()
+const canViewAll = computed(() => can('employees', 'view'))
 
 // Redux API Queries & Mutations
 const { data: employees, isLoading } = useApiQuery<Employee[]>(hrmsApi.endpoints.getEmployees)
 const { data: departments } = useApiQuery<Department[]>(hrmsApi.endpoints.getDepartments)
 const { data: branches } = useApiQuery<Branch[]>(hrmsApi.endpoints.getBranches)
-const { data: grades } = useApiQuery<Grade[]>(hrmsApi.endpoints.getGrades)
-const [addEmployee, { isLoading: isAdding }] = useApiMutation(hrmsApi.endpoints.addEmployee)
 const [deleteEmployee] = useApiMutation(hrmsApi.endpoints.deleteEmployee)
 
 // Filters & Modal State
@@ -63,74 +47,25 @@ const selectedBranch = ref('All')
 const isModalOpen = ref(false)
 const successMessage = ref('')
 
-// VeeValidate + Zod Form Setup
-const { handleSubmit, resetForm } = useForm<EmployeeFormValues>({
-  validationSchema: toTypedSchema(employeeSchema),
-  initialValues: {
-    firstName: '',
-    lastName: '',
-    email: '',
-    phone: '',
-    department: 'Engineering',
-    designation: '',
-    employmentType: 'Full-time',
-    status: 'Active',
-    joiningDate: new Date().toISOString().split('T')[0],
-    salary: 85000,
-    branch: 'San Francisco HQ',
-    grade: 'Professional / Lead (P1-P3)',
-  },
-})
-
-const onSubmit = handleSubmit(async (values) => {
-  const code = `AGM-${Math.floor(1000 + Math.random() * 9000)}`
-  await addEmployee({
-    ...values,
-    employeeCode: code,
-  })
-
-  successMessage.value = `${values.firstName} ${values.lastName} added successfully!`
+const onEmployeeCreated = (employee: Employee) => {
+  successMessage.value = `${employee.firstName} ${employee.lastName} added successfully!`
   setTimeout(() => {
     successMessage.value = ''
   }, 3500)
+}
 
-  resetForm()
-  isModalOpen.value = false
-})
-
-// Role-Based Access Scoping:
-// Super Admin / HR can see ALL employees across the organization.
-// Next role-based users (Department Managers) see their department employees.
-// General Employees see their department/team or fallback to directory.
+// Read access on "Employee Onboarding" shows everyone; otherwise the user
+// sees themself and the people who report to them.
 const roleScopedEmployees = computed(() => {
   const all = employees.value || []
-  if (!all.length) return []
-
-  if (isSuperAdmin.value) {
-    return all
-  }
-  if (isDepartmentManager.value) {
-    const dept = (currentUser.value?.department || '').toLowerCase()
-    const managerName = (currentUser.value?.name || '').toLowerCase()
-    const scoped = all.filter(
-      (e) =>
-        (dept && (e.department || '').toLowerCase() === dept) ||
-        (managerName && (e.reportingManagerName || '').toLowerCase() === managerName)
-    )
-    return scoped.length > 0 ? scoped : all
-  }
-  const myId = currentUser.value?.employeeId || currentUser.value?.id
-  const myDept = (currentUser.value?.department || '').toLowerCase()
-  const myMatches = all.filter(
-    (e) =>
-      (myId && (e.id === myId || e.employeeCode === myId)) ||
-      (myDept && (e.department || '').toLowerCase() === myDept)
-  )
-  return myMatches.length > 0 ? myMatches : all
+  if (canViewAll.value) return all
+  const myId = currentUser.value?.employeeId
+  if (!myId) return []
+  return all.filter((e) => e.id === myId || e.reportingManagerId === myId)
 })
 
 const filteredEmployees = computed(() => {
-  const source = roleScopedEmployees.value.length > 0 ? roleScopedEmployees.value : (employees.value || [])
+  const source = roleScopedEmployees.value
   const q = (searchQuery.value || '').toLowerCase().trim()
   return source.filter((emp) => {
     if (!emp) return false
@@ -149,46 +84,48 @@ const filteredEmployees = computed(() => {
       selectedStatus.value === 'All' || emp.status === selectedStatus.value
 
     const matchesBranch =
-      selectedBranch.value === 'All' || (emp.branch || 'San Francisco HQ') === selectedBranch.value
+      selectedBranch.value === 'All' || emp.branch === selectedBranch.value
 
     return matchesSearch && matchesDept && matchesStatus && matchesBranch
   })
 })
 
-const departmentOptions = computed(() => {
-  return (departments.value || []).map((d) => ({
-    value: d.name,
-    label: d.name,
-  }))
-})
+// Password reset needs user-management rights (HR Administration -> Write)
+const canManageAccounts = computed(() => can('admin', 'create'))
+const resetResult = ref<{ name: string; email: string; password: string; emailSent: boolean } | null>(null)
+const resetError = ref('')
+const resettingId = ref<string | null>(null)
+const copied = ref(false)
 
-const branchOptions = computed(() => {
-  return (branches.value || []).map((b) => ({
-    value: b.name,
-    label: b.name,
-  }))
-})
+const handleResetPassword = async (emp: Employee) => {
+  const name = `${emp.firstName} ${emp.lastName}`
+  if (!confirm(`Reset the password for ${name}?\n\nA new temporary password will be emailed to them and shown to you once. Their current password stops working immediately.`)) return
+  resetError.value = ''
+  resettingId.value = emp.id
+  try {
+    const res = await apiRequest<{ email: string; emailSent: boolean; temporaryPassword: string }>(
+      `/app/employees/${emp.id}/account/resend`,
+      { method: 'POST' },
+    )
+    copied.value = false
+    resetResult.value = { name, email: res.email, password: res.temporaryPassword, emailSent: res.emailSent }
+  } catch (err) {
+    resetError.value = (err as ApiError).data || 'Password could not be reset'
+    setTimeout(() => (resetError.value = ''), 5000)
+  } finally {
+    resettingId.value = null
+  }
+}
 
-const gradeOptions = computed(() => {
-  return (grades.value || []).map((g) => ({
-    value: g.name,
-    label: g.name,
-  }))
-})
-
-const employmentTypeOptions = [
-  { value: 'Full-time', label: 'Full-time' },
-  { value: 'Part-time', label: 'Part-time' },
-  { value: 'Contract', label: 'Contract' },
-  { value: 'Intern', label: 'Intern' },
-]
-
-const statusOptions = [
-  { value: 'Active', label: 'Active' },
-  { value: 'On Leave', label: 'On Leave' },
-  { value: 'Probation', label: 'Probation' },
-  { value: 'Terminated', label: 'Terminated' },
-]
+const copyPassword = async () => {
+  if (!resetResult.value) return
+  try {
+    await navigator.clipboard.writeText(resetResult.value.password)
+    copied.value = true
+  } catch {
+    copied.value = false
+  }
+}
 
 const handleDelete = async (id: string, name: string) => {
   if (confirm(`Are you sure you want to delete ${name}?`)) {
@@ -210,7 +147,7 @@ const exportToCsv = () => {
     `"${e.department}"`,
     `"${e.designation}"`,
     `"${e.grade || ''}"`,
-    `"${e.branch || 'San Francisco HQ'}"`,
+    `"${e.branch || ''}"`,
     `"${e.employmentType}"`,
     `"${e.status}"`,
     `"${e.joiningDate}"`,
@@ -234,7 +171,7 @@ const exportToCsv = () => {
     <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
       <div>
         <h1 class="text-2xl font-extrabold tracking-tight text-slate-900 dark:text-white">
-          Employee Directory
+          Employee Onboarding
         </h1>
         <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">
           Manage 360° employee profiles, organizational hierarchies, documents, and promotions
@@ -244,7 +181,7 @@ const exportToCsv = () => {
       <div class="flex items-center gap-2">
         <!-- Scope Badge -->
         <span
-          v-if="isSuperAdmin"
+          v-if="canViewAll"
           class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 text-xs font-semibold"
         >
           <ShieldCheck class="w-3.5 h-3.5" />
@@ -255,10 +192,11 @@ const exportToCsv = () => {
           class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-50 dark:bg-blue-950 text-[#0e6db3] dark:text-[#38a5e4] border border-blue-200 dark:border-blue-800 text-xs font-semibold"
         >
           <Building class="w-3.5 h-3.5" />
-          <span>{{ currentUser?.department }} Team Only</span>
+          <span>My Team Only</span>
         </span>
 
         <button
+          v-if="can('employees', 'export')"
           @click="exportToCsv"
           class="inline-flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-semibold text-xs transition-colors cursor-pointer"
         >
@@ -266,8 +204,8 @@ const exportToCsv = () => {
           <span>Export CSV</span>
         </button>
         <button
+          v-if="can('employees', 'create')"
           @click="isModalOpen = true"
-          :disabled="!isSuperAdmin"
           class="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#1989d9] hover:bg-[#0e6db3] text-white font-semibold text-xs shadow-md shadow-[#1989d9]/20 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
         >
           <UserPlus class="w-4 h-4" />
@@ -373,7 +311,7 @@ const exportToCsv = () => {
                     @click="router.push(`/employees/${emp.id}`)"
                     class="w-9 h-9 rounded-full bg-gradient-to-tr from-indigo-500 to-purple-500 text-white flex items-center justify-center font-bold text-xs shrink-0 cursor-pointer hover:scale-105 transition-transform"
                   >
-                    {{ (emp.firstName || 'E')[0] }}{{ (emp.lastName || 'M')[0] }}
+                    {{ (emp.firstName || '').charAt(0) }}{{ (emp.lastName || '').charAt(0) }}
                   </div>
                   <div>
                     <button
@@ -394,8 +332,8 @@ const exportToCsv = () => {
                 <p class="text-xs text-slate-500 dark:text-slate-400">{{ emp.department }}</p>
               </td>
               <td class="py-4 px-6">
-                <p class="text-xs font-medium text-slate-800 dark:text-slate-200">{{ emp.branch || 'San Francisco HQ' }}</p>
-                <p class="text-[11px] text-slate-400 truncate max-w-[150px]">{{ emp.grade || 'Lead P2' }}</p>
+                <p class="text-xs font-medium text-slate-800 dark:text-slate-200">{{ emp.branch || '—' }}</p>
+                <p class="text-[11px] text-slate-400 truncate max-w-[150px]">{{ emp.grade || '—' }}</p>
               </td>
               <td class="py-4 px-6">
                 <span
@@ -414,7 +352,7 @@ const exportToCsv = () => {
                 </span>
               </td>
               <td class="py-4 px-6 text-xs font-bold text-slate-800 dark:text-slate-200">
-                ${{ (emp.salary || 0).toLocaleString() }}/yr
+                {{ emp.salary ? `${formatMoney(emp.salary)}/yr` : '—' }}
               </td>
               <td class="py-4 px-6 text-right">
                 <div class="flex items-center justify-end gap-1.5">
@@ -426,6 +364,16 @@ const exportToCsv = () => {
                     <Eye class="w-4 h-4" />
                   </button>
                   <button
+                    v-if="canManageAccounts && emp.hasLogin && emp.id !== currentUser?.employeeId"
+                    :disabled="resettingId === emp.id"
+                    @click="handleResetPassword(emp)"
+                    title="Reset Password"
+                    class="p-1.5 rounded-lg text-slate-400 hover:text-amber-600 dark:hover:text-amber-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors disabled:opacity-40"
+                  >
+                    <KeyRound class="w-4 h-4" />
+                  </button>
+                  <button
+                    v-if="can('employees', 'delete')"
                     @click="handleDelete(emp.id, `${emp.firstName} ${emp.lastName}`)"
                     title="Remove Employee"
                     class="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
@@ -440,109 +388,43 @@ const exportToCsv = () => {
       </div>
     </div>
 
-    <!-- Add Employee Modal Dialog (VeeValidate + Zod) -->
-    <div
-      v-if="isModalOpen"
-      class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs"
-    >
-      <div class="w-full max-w-2xl bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl p-6 md:p-8 overflow-y-auto max-h-[90vh] animate-scaleUp">
-        <div class="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-800">
+    <!-- Password reset error -->
+    <div v-if="resetError" class="fixed bottom-6 right-6 z-50 px-4 py-3 rounded-xl bg-rose-600 text-white text-sm shadow-lg" role="alert">
+      {{ resetError }}
+    </div>
+
+    <!-- Password reset result: the temporary password is shown once -->
+    <div v-if="resetResult" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+      <div class="w-full max-w-md bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl p-6 space-y-4">
+        <div class="flex items-center gap-3">
+          <div class="p-2 rounded-xl bg-amber-50 dark:bg-amber-950/40"><KeyRound class="w-5 h-5 text-amber-600" /></div>
           <div>
-            <h2 class="text-xl font-bold text-slate-900 dark:text-white">Onboard New Employee</h2>
-            <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Fill out the details verified with VeeValidate and Zod schema.
-            </p>
+            <h2 class="text-lg font-bold text-slate-900 dark:text-white">Password reset</h2>
+            <p class="text-xs text-slate-500">{{ resetResult.name }} · {{ resetResult.email }}</p>
           </div>
-          <button
-            @click="isModalOpen = false"
-            class="p-2 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
-          >
-            <X class="w-5 h-5" />
-          </button>
         </div>
-
-        <form @submit="onSubmit" class="space-y-4 mt-6">
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <FormInput name="firstName" label="First Name" placeholder="e.g. Liam" required />
-            <FormInput name="lastName" label="Last Name" placeholder="e.g. Hemsworth" required />
-          </div>
-
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <FormInput name="email" type="email" label="Work Email" placeholder="name@agam.internal" required />
-            <FormInput name="phone" label="Phone Number" placeholder="+1 (555) 000-0000" required />
-          </div>
-
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <FormSelect
-              name="department"
-              label="Department"
-              :options="departmentOptions"
-              required
-            />
-            <FormInput name="designation" label="Designation / Role" placeholder="e.g. Lead QA Engineer" required />
-          </div>
-
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <FormSelect
-              name="branch"
-              label="Branch / Location"
-              :options="branchOptions"
-            />
-            <FormSelect
-              name="grade"
-              label="Salary Grade"
-              :options="gradeOptions"
-            />
-          </div>
-
-          <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <FormSelect
-              name="employmentType"
-              label="Employment Type"
-              :options="employmentTypeOptions"
-              required
-            />
-            <FormSelect
-              name="status"
-              label="Status"
-              :options="statusOptions"
-              required
-            />
-            <FormInput
-              name="salary"
-              type="number"
-              label="Annual Salary ($)"
-              placeholder="e.g. 95000"
-              required
-            />
-          </div>
-
-          <FormInput
-            name="joiningDate"
-            type="date"
-            label="Joining Date"
-            required
-          />
-
-          <div class="flex items-center justify-end gap-3 pt-4 border-t border-slate-100 dark:border-slate-800">
-            <button
-              type="button"
-              @click="isModalOpen = false"
-              class="px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              :disabled="isAdding"
-              class="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs shadow-md shadow-indigo-600/20 active:scale-95 transition-all disabled:opacity-50"
-            >
-              <span v-if="isAdding">Saving via Redux...</span>
-              <span v-else>Save Employee</span>
+        <div>
+          <p class="text-xs text-slate-500 mb-1.5">Temporary password</p>
+          <div class="flex items-center gap-2">
+            <code class="flex-1 px-3 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-base font-mono tracking-wide select-all">{{ resetResult.password }}</code>
+            <button class="flex items-center gap-1 px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-semibold" @click="copyPassword">
+              <Copy class="w-3.5 h-3.5" /> {{ copied ? 'Copied' : 'Copy' }}
             </button>
           </div>
-        </form>
+        </div>
+        <ul class="text-xs text-slate-600 dark:text-slate-300 space-y-1 list-disc pl-4">
+          <li v-if="resetResult.emailSent">Also emailed to {{ resetResult.email }}.</li>
+          <li v-else class="text-amber-700">The email could not be sent — share this password with the employee directly.</li>
+          <li>They must set a new password when they sign in. It expires in 7 days.</li>
+          <li>This password won't be shown again.</li>
+        </ul>
+        <div class="flex justify-end">
+          <button class="px-5 py-2.5 rounded-xl bg-[#1989d9] text-white text-xs font-semibold" @click="resetResult = null">Done</button>
+        </div>
       </div>
     </div>
+
+    <!-- Add Employee: multi-step onboarding wizard -->
+    <AddEmployeeWizard v-if="isModalOpen" @close="isModalOpen = false" @created="onEmployeeCreated" />
   </div>
 </template>

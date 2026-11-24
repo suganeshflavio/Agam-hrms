@@ -19,17 +19,24 @@ import {
 } from '@lucide/vue'
 import AppLogo from '@/components/common/AppLogo.vue'
 import { hrmsApi } from '@/redux/api/hrmsApi'
-import { useApiQuery, useApiMutation, useAppSelector } from '@/redux/vueAdapter'
+import { useApiQuery, useApiMutation } from '@/redux/vueAdapter'
 import type { Payslip, Employee } from '@/types/hrms'
+import { useMoney } from '@/composables/useMoney'
+import { usePermissions } from '@/composables/usePermissions'
 
-const currentUser = useAppSelector((state) => state.auth.user)
-const isSuperAdmin = computed(() => {
-  const r = (currentUser.value?.role || '').toLowerCase()
-  return !r || r.includes('admin') || r.includes('payroll') || r === 'super admin' || r === 'payroll specialist'
-})
+// Access from Roles & Permissions: Payroll & Tax row.
+const { can } = usePermissions()
+const canViewPayroll = computed(() => can('payroll', 'view'))
+const canRunPayroll = computed(() => can('payroll', 'create'))
+const canEditPayroll = computed(() => can('payroll', 'edit'))
 
 const { data: payslips, isLoading } = useApiQuery<Payslip[]>(hrmsApi.endpoints.getPayslips)
 const { data: employees } = useApiQuery<Employee[]>(hrmsApi.endpoints.getEmployees)
+const { company, currencySymbol, formatMoney } = useMoney()
+
+// Payroll runs for the current calendar month.
+const currentPeriod = new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+const periodPayslips = computed(() => (payslips.value || []).filter((p) => p.monthYear === currentPeriod))
 
 const [processPayroll, { isLoading: isProcessing }] = useApiMutation(hrmsApi.endpoints.processPayrollRun)
 const [togglePayslipAccess] = useApiMutation(hrmsApi.endpoints.togglePayslipAccess)
@@ -37,22 +44,24 @@ const [addSalaryBreakdown, { isLoading: isSavingBreakdown }] = useApiMutation(hr
 
 const selectedPayslip = ref<Payslip | null>(null)
 const successMsg = ref('')
+const errorMsg = ref('')
 const isAddBreakdownModalOpen = ref(false)
 
 // Breakdown form inputs
 const breakdownEmpId = ref('')
-const breakdownBasic = ref(5000)
-const breakdownHra = ref(2500)
-const breakdownSpecial = ref(1500)
-const breakdownBonus = ref(500)
+const breakdownBasic = ref<number | ''>('')
+const breakdownHra = ref<number | ''>('')
+const breakdownSpecial = ref<number | ''>('')
+const breakdownBonus = ref<number | ''>('')
 
 const handleRunPayroll = async () => {
-  if (!isSuperAdmin.value) {
-    showNotification('Access Denied: Only Super Admin has authorization to run company-wide payroll.')
+  if (!canRunPayroll.value) {
+    showNotification('Access denied: your role does not have permission to run payroll.')
     return
   }
-  await processPayroll('November 2026')
-  showNotification('November 2026 Payroll batch processed and direct deposit vouchers issued successfully!')
+  const { error } = await processPayroll(currentPeriod)
+  if (error) return showError(error)
+  showNotification(`${currentPeriod} payroll processed.`)
 }
 
 const showNotification = (msg: string) => {
@@ -62,54 +71,53 @@ const showNotification = (msg: string) => {
   }, 4000)
 }
 
+const showError = (error: unknown) => {
+  errorMsg.value = (error as { data?: string })?.data || 'The request could not be completed'
+  setTimeout(() => {
+    errorMsg.value = ''
+  }, 6000)
+}
+
 const handleToggleAccess = async (slipId: string) => {
-  if (!isSuperAdmin.value) {
-    showNotification('Access Denied: Only Super Admin can grant or revoke employee download permissions.')
+  if (!canEditPayroll.value) {
+    showNotification('Access denied: your role does not have permission to change payslip access.')
     return
   }
-  await togglePayslipAccess(slipId)
+  const { error } = await togglePayslipAccess(slipId)
+  if (error) return showError(error)
   showNotification('Employee download access status updated successfully!')
 }
 
 const handleCreateBreakdown = async () => {
-  if (!breakdownEmpId.value || !isSuperAdmin.value) return
+  if (!breakdownEmpId.value || !canEditPayroll.value) return
 
-  await addSalaryBreakdown({
+  const { error } = await addSalaryBreakdown({
     employeeId: breakdownEmpId.value,
-    basic: Number(breakdownBasic.value),
-    hra: Number(breakdownHra.value),
-    specialAllowance: Number(breakdownSpecial.value),
-    performanceBonus: Number(breakdownBonus.value),
+    basic: Number(breakdownBasic.value || 0),
+    hra: Number(breakdownHra.value || 0),
+    specialAllowance: Number(breakdownSpecial.value || 0),
+    performanceBonus: Number(breakdownBonus.value || 0),
   })
+  if (error) return showError(error)
 
   isAddBreakdownModalOpen.value = false
-  showNotification('Custom salary breakdown and pay voucher configured successfully!')
+  showNotification('Salary breakdown saved and payslip issued.')
 }
 
 const canDownloadPayslip = (slip: Payslip) => {
-  if (isSuperAdmin.value) return true
+  if (canViewPayroll.value) return true
   return !!slip.downloadAccessGranted
 }
 
-const totalGross = computed(() => {
-  return (payslips.value || []).reduce((acc, p) => acc + p.breakdown.grossEarnings, 0)
-})
-
-const totalDeductions = computed(() => {
-  return (payslips.value || []).reduce((acc, p) => acc + p.breakdown.totalDeductions, 0)
-})
-
-const totalNet = computed(() => {
-  return (payslips.value || []).reduce((acc, p) => acc + p.breakdown.netPay, 0)
-})
+const totalGross = computed(() => periodPayslips.value.reduce((acc, p) => acc + p.breakdown.grossEarnings, 0))
+const totalDeductions = computed(() => periodPayslips.value.reduce((acc, p) => acc + p.breakdown.totalDeductions, 0))
+const totalNet = computed(() => periodPayslips.value.reduce((acc, p) => acc + p.breakdown.netPay, 0))
 
 const handlePrint = () => {
   window.print()
 }
 
-const formatCurrency = (val: number) => {
-  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(val)
-}
+const formatCurrency = (val: number) => formatMoney(val)
 </script>
 
 <template>
@@ -126,26 +134,26 @@ const formatCurrency = (val: number) => {
       </div>
 
       <div class="flex items-center gap-2.5">
-        <!-- Add Salary Breakdown (Super Admin Only) -->
+        <!-- Add Salary Breakdown (Payroll & Tax: Write) -->
         <button
+          v-if="canEditPayroll"
           @click="isAddBreakdownModalOpen = true"
-          :disabled="!isSuperAdmin"
           class="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-[#1989d9] text-slate-800 dark:text-slate-100 font-bold text-xs shadow-xs disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
         >
           <Plus class="w-4 h-4 text-[#1989d9]" />
           <span>Add Salary Breakdown</span>
         </button>
 
-        <!-- Run Payroll Batch (Super Admin Only) -->
+        <!-- Run Payroll Batch (Payroll & Tax: Write) -->
         <button
+          v-if="canRunPayroll"
           @click="handleRunPayroll"
-          :disabled="isProcessing || !isSuperAdmin"
+          :disabled="isProcessing"
           class="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-semibold text-xs shadow-md shadow-emerald-600/20 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer self-start sm:self-auto"
         >
           <Banknote class="w-4 h-4" />
           <span v-if="isProcessing">Processing Batch...</span>
-          <span v-else-if="!isSuperAdmin">Payroll Locked</span>
-          <span v-else>Run November 2026 Payroll</span>
+          <span v-else>Run {{ currentPeriod }} Payroll</span>
         </button>
       </div>
     </div>
@@ -158,6 +166,14 @@ const formatCurrency = (val: number) => {
       <CheckCircle2 class="w-5 h-5 text-emerald-500 shrink-0" />
       <span>{{ successMsg }}</span>
     </div>
+    <div
+      v-if="errorMsg"
+      class="flex items-center gap-2 p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/60 border border-rose-200 dark:border-rose-800 text-rose-800 dark:text-rose-200 text-sm font-medium"
+      role="alert"
+    >
+      <AlertTriangle class="w-5 h-5 text-rose-500 shrink-0" />
+      <span>{{ errorMsg }}</span>
+    </div>
 
     <!-- Financial Stats Summary -->
     <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -166,7 +182,7 @@ const formatCurrency = (val: number) => {
         <p class="text-2xl font-black font-mono text-slate-900 dark:text-white mt-1">
           {{ formatCurrency(totalGross) }}
         </p>
-        <p class="text-xs text-slate-400 mt-1">Base earnings before withholdings</p>
+        <p class="text-xs text-slate-400 mt-1">{{ currentPeriod }} · {{ periodPayslips.length }} payslip(s)</p>
       </div>
 
       <div class="p-5 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xs">
@@ -174,28 +190,28 @@ const formatCurrency = (val: number) => {
         <p class="text-2xl font-black font-mono text-rose-600 dark:text-rose-400 mt-1">
           -{{ formatCurrency(totalDeductions) }}
         </p>
-        <p class="text-xs text-slate-400 mt-1">PF (12%), TDS (15%), PT ($50), Medical</p>
+        <p class="text-xs text-slate-400 mt-1">{{ currentPeriod }} · PF, TDS, PT and other deductions</p>
       </div>
 
       <div class="p-5 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xs">
-        <p class="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Net Take-Home Disbursed</p>
+        <p class="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Net Take-Home</p>
         <p class="text-2xl font-black font-mono text-emerald-600 dark:text-emerald-400 mt-1">
           {{ formatCurrency(totalNet) }}
         </p>
-        <p class="text-xs text-slate-400 mt-1">Direct Deposit (ACH) Batches</p>
+        <p class="text-xs text-slate-400 mt-1">{{ currentPeriod }}</p>
       </div>
     </div>
 
-    <!-- Super Admin Policy Note -->
+    <!-- Access note (from Roles & Permissions) -->
     <div class="p-4 rounded-2xl bg-[#1989d9]/10 border border-[#1989d9]/25 flex items-center justify-between text-xs text-[#044663] dark:text-[#38a5e4]">
       <div class="flex items-center gap-2">
         <ShieldCheck class="w-4 h-4 shrink-0 text-[#1989d9]" />
         <span>
-          <strong>Super Admin Security Policy:</strong> Only Super Admins can adjust salary breakdowns, execute batch runs, and toggle download access permissions for employees.
+          <strong>Access:</strong> Running payroll, salary breakdowns and payslip download access follow the Payroll &amp; Tax permissions in Roles &amp; Permissions.
         </span>
       </div>
       <span class="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-white dark:bg-slate-800 shrink-0">
-        {{ isSuperAdmin ? 'Full Admin Access' : 'Read-Only Member' }}
+        {{ canEditPayroll || canRunPayroll ? 'Can manage payroll' : 'Read-only' }}
       </span>
     </div>
 
@@ -204,7 +220,7 @@ const formatCurrency = (val: number) => {
       <div class="p-5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
         <div>
           <h2 class="text-base font-bold text-slate-900 dark:text-white">Processed Payroll & Salary Statements</h2>
-          <p class="text-xs text-slate-500 dark:text-slate-400">Direct deposit payroll slips with download authorization controls</p>
+          <p class="text-xs text-slate-500 dark:text-slate-400">Payslips from all payroll runs, with download authorization controls</p>
         </div>
         <span class="px-2.5 py-1 rounded-full text-xs font-semibold bg-[#1989d9]/10 text-[#0e6db3] dark:text-[#38a5e4]">
           {{ payslips?.length || 0 }} Statements
@@ -267,9 +283,9 @@ const formatCurrency = (val: number) => {
                     <span>{{ slip.downloadAccessGranted ? 'Access Granted' : 'Restricted' }}</span>
                   </span>
 
-                  <!-- Super Admin Permission Switcher -->
+                  <!-- Payslip download access (Payroll & Tax: Write) -->
                   <button
-                    v-if="isSuperAdmin"
+                    v-if="canEditPayroll"
                     @click="handleToggleAccess(slip.id)"
                     title="Toggle employee download permission"
                     class="text-[10px] font-bold text-[#1989d9] hover:underline cursor-pointer"
@@ -308,6 +324,9 @@ const formatCurrency = (val: number) => {
                   </span>
                 </div>
               </td>
+            </tr>
+            <tr v-if="!isLoading && !payslips?.length">
+              <td colspan="8" class="py-10 text-center text-slate-400">No payslips yet. Run payroll to generate them.</td>
             </tr>
           </tbody>
         </table>
@@ -354,10 +373,11 @@ const formatCurrency = (val: number) => {
               <div class="flex items-center gap-2">
                 <AppLogo variant="full" className="h-9 w-auto max-w-[180px]" />
               </div>
-              <p class="text-[11px] text-slate-500 dark:text-slate-400 mt-2">
-                100 Market St, Suite 400 • San Francisco, CA 94105
+              <p class="text-[11px] font-semibold text-slate-700 dark:text-slate-300 mt-2">
+                {{ company?.legalName || company?.name || '—' }}
               </p>
-              <p class="text-[11px] text-slate-400">EIN: US-987654321 • Payroll Operations</p>
+              <p v-if="company?.headquarters" class="text-[11px] text-slate-500 dark:text-slate-400">{{ company.headquarters }}</p>
+              <p v-if="company?.taxId" class="text-[11px] text-slate-400">Tax ID: {{ company.taxId }}</p>
             </div>
             <div class="text-right">
               <span class="text-xs font-bold uppercase tracking-wider text-slate-400">Pay Voucher</span>
@@ -387,12 +407,12 @@ const formatCurrency = (val: number) => {
               <span class="font-bold text-slate-800 dark:text-slate-200">{{ selectedPayslip.designation }}</span>
             </div>
             <div>
-              <span class="text-slate-400 block">Disbursement Mode</span>
-              <span class="font-bold text-slate-800 dark:text-slate-200">Direct Deposit (ACH)</span>
+              <span class="text-slate-400 block">Bank Account</span>
+              <span class="font-bold text-slate-800 dark:text-slate-200">{{ selectedPayslip.bankAccount || '—' }}</span>
             </div>
             <div>
               <span class="text-slate-400 block">Paid Days / LOP</span>
-              <span class="font-bold text-slate-800 dark:text-slate-200">{{ selectedPayslip.paidDays }} Days / 0 LOP</span>
+              <span class="font-bold text-slate-800 dark:text-slate-200">{{ selectedPayslip.paidDays }} Days / {{ selectedPayslip.lossOfPayDays }} LOP</span>
             </div>
           </div>
 
@@ -429,7 +449,7 @@ const formatCurrency = (val: number) => {
                 Statutory Deductions
               </h3>
               <div class="flex justify-between py-1">
-                <span class="text-slate-500">Provident Fund (PF - 12%)</span>
+                <span class="text-slate-500">Provident Fund (PF)</span>
                 <span class="font-mono text-slate-800 dark:text-slate-200">{{ formatCurrency(selectedPayslip.breakdown.providentFund) }}</span>
               </div>
               <div class="flex justify-between py-1">
@@ -441,7 +461,7 @@ const formatCurrency = (val: number) => {
                 <span class="font-mono text-slate-800 dark:text-slate-200">{{ formatCurrency(selectedPayslip.breakdown.professionalTax) }}</span>
               </div>
               <div class="flex justify-between py-1">
-                <span class="text-slate-500">Medical Insurance</span>
+                <span class="text-slate-500">Other Deductions</span>
                 <span class="font-mono text-slate-800 dark:text-slate-200">{{ formatCurrency(selectedPayslip.breakdown.medicalInsurance) }}</span>
               </div>
               <div class="flex justify-between py-2 border-t border-slate-100 dark:border-slate-800 font-bold text-slate-900 dark:text-white">
@@ -458,8 +478,8 @@ const formatCurrency = (val: number) => {
               <p class="text-2xl font-black font-mono mt-0.5">{{ formatCurrency(selectedPayslip.breakdown.netPay) }}</p>
             </div>
             <div class="text-right text-xs text-sky-200">
-              <p>Direct Deposit Authorized</p>
-              <p class="text-[10px] text-sky-300">Bank Transfer Ref: ACH-{{ selectedPayslip.payslipNumber.slice(-6) }}</p>
+              <p>{{ selectedPayslip.paymentStatus }}</p>
+              <p class="text-[10px] text-sky-300">{{ selectedPayslip.paymentDate || '—' }}</p>
             </div>
           </div>
         </div>
@@ -501,19 +521,19 @@ const formatCurrency = (val: number) => {
 
           <div class="grid grid-cols-2 gap-3">
             <div>
-              <label class="block font-bold text-slate-700 dark:text-slate-300 mb-1">Basic Pay ($)</label>
+              <label class="block font-bold text-slate-700 dark:text-slate-300 mb-1">Basic Pay{{ currencySymbol ? ` (${currencySymbol})` : '' }}</label>
               <input type="number" v-model="breakdownBasic" class="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-mono font-bold" />
             </div>
             <div>
-              <label class="block font-bold text-slate-700 dark:text-slate-300 mb-1">HRA ($)</label>
+              <label class="block font-bold text-slate-700 dark:text-slate-300 mb-1">HRA{{ currencySymbol ? ` (${currencySymbol})` : '' }}</label>
               <input type="number" v-model="breakdownHra" class="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-mono font-bold" />
             </div>
             <div>
-              <label class="block font-bold text-slate-700 dark:text-slate-300 mb-1">Special Allowance ($)</label>
+              <label class="block font-bold text-slate-700 dark:text-slate-300 mb-1">Special Allowance{{ currencySymbol ? ` (${currencySymbol})` : '' }}</label>
               <input type="number" v-model="breakdownSpecial" class="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-mono font-bold" />
             </div>
             <div>
-              <label class="block font-bold text-slate-700 dark:text-slate-300 mb-1">Performance Bonus ($)</label>
+              <label class="block font-bold text-slate-700 dark:text-slate-300 mb-1">Performance Bonus{{ currencySymbol ? ` (${currencySymbol})` : '' }}</label>
               <input type="number" v-model="breakdownBonus" class="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-mono font-bold" />
             </div>
           </div>

@@ -8,6 +8,8 @@ export default defineConfig((configEnv) =>
     {
       test: {
         environment: 'jsdom',
+        // Node 25+ ships a built-in localStorage that shadows jsdom's.
+        execArgv: ['--no-experimental-webstorage'],
         exclude: [...configDefaults.exclude, 'e2e/**'],
         root: fileURLToPath(new URL('./', import.meta.url)),
       },

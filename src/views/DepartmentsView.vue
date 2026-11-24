@@ -23,6 +23,7 @@ import { useApiQuery, useApiMutation } from '@/redux/vueAdapter'
 import type { Department, Designation, Grade } from '@/types/hrms'
 import FormInput from '@/components/forms/FormInput.vue'
 import FormSelect from '@/components/forms/FormSelect.vue'
+import { useMoney } from '@/composables/useMoney'
 
 // Redux API Queries & Mutations
 const { data: departments, isLoading: isDeptLoading } = useApiQuery<Department[]>(hrmsApi.endpoints.getDepartments)
@@ -43,6 +44,8 @@ const isDeptModalOpen = ref(false)
 const isDesigModalOpen = ref(false)
 const feedbackMessage = ref('')
 
+const { formatMoney, currencySymbol } = useMoney()
+
 const showFeedback = (msg: string) => {
   feedbackMessage.value = msg
   setTimeout(() => {
@@ -55,7 +58,7 @@ const departmentSchema = z.object({
   name: z.string().min(2, 'Department name must be at least 2 characters'),
   code: z.string().min(2, 'Code must be at least 2 characters').max(6, 'Code max 6 characters').toUpperCase(),
   head: z.string().min(2, 'Head of Department is required'),
-  budget: z.coerce.number().min(1000, 'Budget must be at least $1,000'),
+  budget: z.coerce.number().min(0, 'Budget cannot be negative'),
 })
 
 type DepartmentFormValues = z.infer<typeof departmentSchema>
@@ -66,7 +69,7 @@ const { handleSubmit: handleDeptSubmit, resetForm: resetDeptForm } = useForm<Dep
     name: '',
     code: '',
     head: '',
-    budget: 150000,
+    budget: 0,
   },
 })
 
@@ -82,7 +85,7 @@ const designationSchema = z.object({
   title: z.string().min(2, 'Designation title must be at least 2 characters'),
   code: z.string().min(2, 'Designation code is required').toUpperCase(),
   departmentName: z.string().min(1, 'Please select a department'),
-  grade: z.string().min(1, 'Please select a salary grade'),
+  grade: z.string().optional(),
   description: z.string().optional(),
 })
 
@@ -93,20 +96,24 @@ const { handleSubmit: handleDesigSubmit, resetForm: resetDesigForm } = useForm<D
   initialValues: {
     title: '',
     code: '',
-    departmentName: 'Engineering',
-    grade: 'Professional / Lead (P1-P3)',
+    departmentName: '',
+    grade: '',
     description: '',
   },
 })
 
 const onDesigSubmit = handleDesigSubmit(async (values) => {
   const matchedDept = (departments.value || []).find((d) => d.name === values.departmentName)
+  if (!matchedDept) {
+    showFeedback(`Department "${values.departmentName}" was not found. Create it first.`)
+    return
+  }
   await addDesignation({
     title: values.title,
     code: values.code,
-    departmentId: matchedDept?.id || 'dept-1',
+    departmentId: matchedDept.id,
     departmentName: values.departmentName,
-    grade: values.grade,
+    grade: values.grade || '',
     description: values.description || '',
   })
   showFeedback(`Designation "${values.title}" registered successfully!`)
@@ -186,7 +193,7 @@ const totalBudget = computed(() => {
     <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
       <div class="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xs">
         <div class="flex items-center justify-between text-slate-400">
-          <span class="text-xs font-semibold">Active Units</span>
+          <span class="text-xs font-semibold">Departments</span>
           <Building2 class="w-4 h-4 text-indigo-500" />
         </div>
         <p class="text-2xl font-black text-slate-900 dark:text-white mt-1">{{ departments?.length || 0 }}</p>
@@ -211,7 +218,7 @@ const totalBudget = computed(() => {
           <DollarSign class="w-4 h-4 text-emerald-500" />
         </div>
         <p class="text-2xl font-black text-emerald-600 dark:text-emerald-400 mt-1 font-mono">
-          ${{ (totalBudget / 1000).toFixed(0) }}k
+          {{ formatMoney(totalBudget, { notation: 'compact' }) }}
         </p>
       </div>
     </div>
@@ -257,9 +264,6 @@ const totalBudget = computed(() => {
             <span class="w-10 h-10 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center font-bold text-xs">
               {{ dept.code }}
             </span>
-            <span class="text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
-              Active Unit
-            </span>
           </div>
 
           <h3 class="text-base font-bold text-slate-900 dark:text-white mt-4 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
@@ -278,7 +282,7 @@ const totalBudget = computed(() => {
             <div class="flex items-center justify-between py-1">
               <span class="text-slate-400">Annual Budget:</span>
               <span class="font-bold text-emerald-600 dark:text-emerald-400 font-mono">
-                ${{ (dept.budget || 0).toLocaleString() }}
+                {{ dept.budget ? formatMoney(dept.budget) : '—' }}
               </span>
             </div>
           </div>
@@ -367,7 +371,7 @@ const totalBudget = computed(() => {
                   </span>
                 </td>
                 <td class="py-4 px-6 text-xs text-slate-500 dark:text-slate-400 max-w-xs truncate">
-                  {{ desig.description || 'Enterprise role responsibility description on file' }}
+                  {{ desig.description || '—' }}
                 </td>
               </tr>
             </tbody>
@@ -399,7 +403,7 @@ const totalBudget = computed(() => {
           <FormInput name="name" label="Department Name" placeholder="e.g. Information Security" required />
           <FormInput name="code" label="Department Code" placeholder="e.g. SEC" required />
           <FormInput name="head" label="Head of Department" placeholder="e.g. Marcus Vance" required />
-          <FormInput name="budget" type="number" label="Annual Operational Budget ($)" placeholder="200000" required />
+          <FormInput name="budget" type="number" :label="`Annual Operational Budget${currencySymbol ? ` (${currencySymbol})` : ''}`" placeholder="0" required />
 
           <div class="flex items-center justify-end gap-3 pt-4 border-t border-slate-100 dark:border-slate-800">
             <button
@@ -453,7 +457,6 @@ const totalBudget = computed(() => {
             name="grade"
             label="Salary Grade"
             :options="grades ? grades.map(g => ({ value: g.name, label: g.name })) : []"
-            required
           />
           <FormInput name="description" label="Brief Responsibilities" placeholder="Key responsibilities and domain expectations" />
 

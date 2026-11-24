@@ -28,10 +28,14 @@ import {
   X,
   ExternalLink,
   Landmark,
+  Eye,
 } from '@lucide/vue'
 import { hrmsApi } from '@/redux/api/hrmsApi'
-import { useApiQuery, useApiMutation } from '@/redux/vueAdapter'
-import type { Employee, Department, Designation, Grade, EmployeeDocument } from '@/types/hrms'
+import { useApiQuery, useApiMutation, useAppDispatch } from '@/redux/vueAdapter'
+import { apiBlob, apiRequest, type ApiError } from '@/services/apiClient'
+import type { Employee, Department, Designation, Grade, EmployeeDocument, Payslip, CompanyInfo } from '@/types/hrms'
+import { useMoney } from '@/composables/useMoney'
+import { usePermissions } from '@/composables/usePermissions'
 import FormInput from '@/components/forms/FormInput.vue'
 import FormSelect from '@/components/forms/FormSelect.vue'
 
@@ -44,9 +48,11 @@ const { data: employees } = useApiQuery<Employee[]>(hrmsApi.endpoints.getEmploye
 const { data: departments } = useApiQuery<Department[]>(hrmsApi.endpoints.getDepartments)
 const { data: designations } = useApiQuery<Designation[]>(hrmsApi.endpoints.getDesignations)
 const { data: grades } = useApiQuery<Grade[]>(hrmsApi.endpoints.getGrades)
+const { data: payslips } = useApiQuery<Payslip[]>(hrmsApi.endpoints.getPayslips)
+const { data: company } = useApiQuery<CompanyInfo>(hrmsApi.endpoints.getCompany)
+const { formatMoney, currencySymbol } = useMoney()
 
 const [recordTransferPromotion, { isLoading: isPromoting }] = useApiMutation(hrmsApi.endpoints.recordTransferPromotion)
-const [addEmployeeDocument, { isLoading: isUploadingDoc }] = useApiMutation(hrmsApi.endpoints.addEmployeeDocument)
 const [verifyEmployeeDocument] = useApiMutation(hrmsApi.endpoints.verifyEmployeeDocument)
 
 // Current Employee
@@ -72,12 +78,42 @@ const showFeedback = (msg: string, type: 'success' | 'error' = 'success') => {
   }, 3500)
 }
 
+// Login account (temporary password emailed by the backend)
+const dispatch = useAppDispatch()
+// Access follows HR Administration -> Roles & Permissions.
+const { can } = usePermissions()
+const canManageAccounts = computed(() => can('admin', 'create'))
+const canEditEmployee = computed(() => can('employees', 'edit'))
+const canUploadDocuments = computed(() => can('employees', 'create') || can('employees', 'edit'))
+const canVerifyDocuments = computed(() => can('employees', 'approve'))
+const isAccountBusy = ref(false)
+
+const accountRequest = async (path: string, success: string) => {
+  if (!employee.value) return
+  isAccountBusy.value = true
+  try {
+    const res = await apiRequest<{ emailSent?: boolean; account?: { emailSent: boolean } }>(`/app/employees/${employee.value.id}/${path}`, {
+      method: 'POST',
+      body: { loginRole: 'General Employee' },
+    })
+    const sent = res?.emailSent ?? res?.account?.emailSent
+    showFeedback(sent === false ? 'Login saved, but the email could not be sent' : success, sent === false ? 'error' : 'success')
+    dispatch(hrmsApi.util.invalidateTags(['Employees']))
+  } catch (err) {
+    showFeedback((err as ApiError).data || 'Request failed', 'error')
+  } finally {
+    isAccountBusy.value = false
+  }
+}
+const createLogin = () => accountRequest('account', 'Login created and details emailed')
+const resendLogin = () => accountRequest('account/resend', 'New login details emailed')
+
 // Promotion / Transfer Form Setup (Zod + VeeValidate)
 const transferSchema = z.object({
   type: z.enum(['Promotion', 'Transfer'] as const),
   newRole: z.string().min(2, 'Role must be at least 2 characters'),
   newDepartment: z.string().min(2, 'Department is required'),
-  newSalary: z.number().min(30000, 'Salary must be at least $30,000'),
+  newSalary: z.number().min(1, 'Enter the new annual salary'),
   notes: z.string().optional(),
 })
 
@@ -89,10 +125,24 @@ const { handleSubmit: handleTransferSubmit, resetForm: resetTransferForm } = use
     type: 'Promotion',
     newRole: '',
     newDepartment: '',
-    newSalary: 100000,
+    newSalary: 0,
     notes: '',
   },
 })
+
+// Prefill the lifecycle form from the employee's current record.
+const openLifecycleModal = () => {
+  resetTransferForm({
+    values: {
+      type: 'Promotion',
+      newRole: '',
+      newDepartment: employee.value?.department || '',
+      newSalary: employee.value?.salary || 0,
+      notes: '',
+    },
+  })
+  isLifecycleModalOpen.value = true
+}
 
 const onTransferSubmit = handleTransferSubmit(async (values) => {
   if (!employee.value) return
@@ -114,27 +164,61 @@ const onTransferSubmit = handleTransferSubmit(async (values) => {
   }
 })
 
-// Document Upload State
+// Document Upload State (real file upload to the backend)
 const docTitle = ref('')
 const docCategory = ref<EmployeeDocument['category']>('Contract')
-const docFileSize = ref('1.8 MB')
+const docFile = ref<File | null>(null)
+const docError = ref('')
+const isUploadingDoc = ref(false)
+const ALLOWED_DOC_TYPES = ['application/pdf', 'image/jpeg', 'image/png']
+
+const humanSize = (bytes: number) =>
+  bytes > 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`
+
+const onDocFileChange = (event: Event) => {
+  docError.value = ''
+  const file = (event.target as HTMLInputElement).files?.[0] || null
+  if (file && !ALLOWED_DOC_TYPES.includes(file.type)) {
+    docError.value = 'Only PDF, JPG or PNG files are allowed'
+    docFile.value = null
+    return
+  }
+  if (file && file.size > 10 * 1048576) {
+    docError.value = 'Files must be smaller than 10 MB'
+    docFile.value = null
+    return
+  }
+  docFile.value = file
+  if (file && !docTitle.value.trim()) docTitle.value = file.name
+}
 
 const handleDocUpload = async () => {
-  if (!docTitle.value.trim() || !employee.value) return
+  if (!employee.value) return
+  if (!docFile.value) {
+    docError.value = 'Choose a file to upload'
+    return
+  }
+  if (!docTitle.value.trim()) {
+    docError.value = 'Enter a document title'
+    return
+  }
+  isUploadingDoc.value = true
   try {
-    await addEmployeeDocument({
-      employeeId: employee.value.id,
-      doc: {
-        title: docTitle.value.trim(),
-        category: docCategory.value,
-        fileSize: docFileSize.value,
-      },
-    })
+    const body = new FormData()
+    body.append('doc[title]', docTitle.value.trim())
+    body.append('doc[category]', docCategory.value)
+    body.append('doc[fileSize]', humanSize(docFile.value.size))
+    body.append('file', docFile.value)
+    await apiRequest(`/app/employees/${employee.value.id}/documents`, { method: 'POST', body })
+    dispatch(hrmsApi.util.invalidateTags(['Employees']))
     showFeedback(`Document "${docTitle.value}" uploaded successfully!`)
     docTitle.value = ''
+    docFile.value = null
     isDocModalOpen.value = false
-  } catch (err: any) {
-    showFeedback(err?.message || 'Failed to upload document', 'error')
+  } catch (err) {
+    docError.value = (err as ApiError).data || 'Failed to upload document'
+  } finally {
+    isUploadingDoc.value = false
   }
 }
 
@@ -148,20 +232,53 @@ const handleVerifyDoc = async (docId: string, status: 'Verified' | 'Rejected') =
   showFeedback(`Document marked as ${status}`)
 }
 
+// Opens the document in a new tab. The file is fetched with the user's token,
+// so access follows the same rules as the backend (HR or the employee themself).
+const viewingDocId = ref('')
+const handleViewDoc = async (docId: string) => {
+  if (!employee.value) return
+  docError.value = ''
+  viewingDocId.value = docId
+  const tab = window.open('', '_blank') // opened now so the browser doesn't block it as a pop-up
+  try {
+    const blob = await apiBlob(`/employees/employees/${employee.value.id}/documents/${docId}/download`, { disposition: 'inline' })
+    const url = URL.createObjectURL(blob)
+    if (tab) tab.location.href = url
+    else window.open(url, '_blank')
+    setTimeout(() => URL.revokeObjectURL(url), 60_000)
+  } catch (err) {
+    tab?.close()
+    docError.value = (err as ApiError).data || 'Could not open the document'
+    showFeedback(docError.value)
+  } finally {
+    viewingDocId.value = ''
+  }
+}
+
 // Formatting & Helpers
+const formatDate = (value?: string) =>
+  value ? new Date(`${value}T00:00:00`).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : '—'
+
+const addressLines = computed(() => {
+  const d = employee.value?.addressDetails
+  const line = d?.line || employee.value?.address
+  const rest = [d?.city, [d?.state, d?.postalCode].filter(Boolean).join(' '), d?.country].filter(Boolean).join(', ')
+  return [line, rest].filter(Boolean) as string[]
+})
+
 const emergencyContactInfo = computed(() => {
   const contact = employee.value?.emergencyContact
   if (!contact) {
-    return { name: 'Jane Connor (Spouse)', relation: 'Spouse / Partner', phone: '+1 (555) 345-6789' }
+    return { name: 'Not provided', relation: '—', phone: '—' }
   }
   if (typeof contact === 'string') {
-    return { name: contact, relation: 'Emergency Contact', phone: '+1 (555) 345-6789' }
+    return { name: contact, relation: 'Emergency Contact', phone: '—' }
   }
   return contact
 })
 
 const tenureDisplay = computed(() => {
-  if (!employee.value?.joiningDate) return '1 Year'
+  if (!employee.value?.joiningDate) return '—'
   const start = new Date(employee.value.joiningDate)
   const now = new Date()
   const diffMonths = (now.getFullYear() - start.getFullYear()) * 12 + (now.getMonth() - start.getMonth())
@@ -172,17 +289,25 @@ const tenureDisplay = computed(() => {
   return remainingMonths > 0 ? `${years}y ${remainingMonths}m` : `${years} years`
 })
 
-const formatCurrency = (val?: number) => {
-  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(val || 0)
-}
+const formatCurrency = (val?: number) => (val ? formatMoney(val) : '—')
 
-const monthlyGross = computed(() => Math.round((employee.value?.salary || 0) / 12))
-const monthlyBasic = computed(() => Math.round(monthlyGross.value * 0.5))
-const monthlyHra = computed(() => Math.round(monthlyGross.value * 0.25))
-const monthlyAllowance = computed(() => monthlyGross.value - (monthlyBasic.value + monthlyHra.value))
-const estimatedTds = computed(() => Math.round(monthlyGross.value * 0.15))
-const estimatedPf = computed(() => Math.round(monthlyBasic.value * 0.12))
-const estimatedNetPay = computed(() => monthlyGross.value - (estimatedTds.value + estimatedPf.value))
+// Compensation figures come from the employee's latest payslip (no client-side estimates).
+const latestPayslip = computed(() => {
+  const mine = (payslips.value || []).filter((p) => p.employeeId === employee.value?.id)
+  return [...mine].sort((a, b) => (b.paymentDate || '').localeCompare(a.paymentDate || ''))[0]
+})
+
+const reportingManager = computed(() =>
+  (employees.value || []).find((e) => e.id === employee.value?.reportingManagerId),
+)
+
+const probationLabel = computed(() => {
+  const e = employee.value
+  if (!e) return '—'
+  if (e.status === 'Probation') return e.probationEndDate ? `In probation until ${e.probationEndDate}` : 'In probation'
+  if (e.probationEndDate) return `Completed on ${e.probationEndDate}`
+  return '—'
+})
 </script>
 
 <template>
@@ -194,18 +319,20 @@ const estimatedNetPay = computed(() => monthlyGross.value - (estimatedTds.value 
         class="inline-flex items-center gap-2 text-xs font-semibold text-slate-500 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors"
       >
         <ArrowLeft class="w-4 h-4" />
-        <span>Back to Employee Directory</span>
+        <span>Back to Employee Onboarding</span>
       </button>
 
       <div class="flex items-center gap-2">
         <button
-          @click="isLifecycleModalOpen = true"
+          v-if="canEditEmployee"
+          @click="openLifecycleModal"
           class="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-xs shadow-md shadow-indigo-600/20 active:scale-95 transition-all"
         >
           <TrendingUp class="w-3.5 h-3.5" />
           <span>Promotion / Transfer</span>
         </button>
         <button
+          v-if="canUploadDocuments"
           @click="isDocModalOpen = true"
           class="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-medium text-xs transition-colors"
         >
@@ -254,7 +381,7 @@ const estimatedNetPay = computed(() => monthlyGross.value - (estimatedTds.value 
           <!-- Profile Left Details -->
           <div class="flex items-start md:items-center gap-5">
             <div class="w-20 h-20 rounded-2xl bg-gradient-to-tr from-indigo-600 to-purple-600 text-white flex items-center justify-center font-bold text-2xl shadow-xl shadow-indigo-500/20 shrink-0">
-              {{ (employee.firstName || 'E')[0] }}{{ (employee.lastName || 'M')[0] }}
+              {{ (employee.firstName || '').charAt(0) }}{{ (employee.lastName || '').charAt(0) }}
             </div>
             <div>
               <div class="flex flex-wrap items-center gap-2.5">
@@ -295,7 +422,7 @@ const estimatedNetPay = computed(() => monthlyGross.value - (estimatedTds.value 
                 </span>
                 <span class="flex items-center gap-1.5">
                   <MapPin class="w-3.5 h-3.5 text-slate-400" />
-                  {{ employee.branch || 'San Francisco HQ' }}
+                  {{ employee.branch || '—' }}
                 </span>
               </div>
             </div>
@@ -313,7 +440,7 @@ const estimatedNetPay = computed(() => monthlyGross.value - (estimatedTds.value 
             </div>
             <div class="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-800 text-center col-span-2 sm:col-span-1">
               <span class="text-[10px] font-semibold text-slate-400 uppercase tracking-wider block">Grade</span>
-              <span class="text-xs font-bold text-slate-800 dark:text-slate-200 mt-0.5 block truncate">{{ employee.grade || 'Lead P2' }}</span>
+              <span class="text-xs font-bold text-slate-800 dark:text-slate-200 mt-0.5 block truncate">{{ employee.grade || '—' }}</span>
             </div>
           </div>
         </div>
@@ -355,9 +482,9 @@ const estimatedNetPay = computed(() => monthlyGross.value - (estimatedTds.value 
           <div class="p-4 rounded-2xl bg-indigo-50/60 dark:bg-indigo-950/30 border border-indigo-100 dark:border-indigo-900/50">
             <span class="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400">Direct Manager</span>
             <p class="text-sm font-bold text-slate-900 dark:text-white mt-0.5">
-              {{ employee.reportingManagerName || 'Sarah Connor (VP of Engineering)' }}
+              {{ employee.reportingManagerName || 'Not assigned' }}
             </p>
-            <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">manager@agam.internal</p>
+            <p v-if="reportingManager?.email" class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{{ reportingManager.email }}</p>
           </div>
 
           <div class="space-y-3 pt-2 text-xs">
@@ -371,11 +498,11 @@ const estimatedNetPay = computed(() => monthlyGross.value - (estimatedTds.value 
             </div>
             <div class="flex justify-between py-1.5 border-b border-slate-100 dark:border-slate-800">
               <span class="text-slate-500">Work Location</span>
-              <span class="font-bold text-slate-800 dark:text-slate-200">{{ employee.branch || 'San Francisco HQ' }}</span>
+              <span class="font-bold text-slate-800 dark:text-slate-200">{{ employee.branch || '—' }}</span>
             </div>
             <div class="flex justify-between py-1.5">
               <span class="text-slate-500">Probation Period</span>
-              <span class="font-bold text-emerald-600 dark:text-emerald-400">Completed (Permanent)</span>
+              <span class="font-bold text-slate-800 dark:text-slate-200">{{ probationLabel }}</span>
             </div>
           </div>
         </div>
@@ -401,16 +528,6 @@ const estimatedNetPay = computed(() => monthlyGross.value - (estimatedTds.value 
               <p class="text-slate-500">Contact Number: {{ emergencyContactInfo.phone }}</p>
             </div>
 
-            <div class="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/60 dark:border-slate-800 space-y-2">
-              <div class="flex items-center justify-between">
-                <span class="font-bold text-slate-800 dark:text-slate-100 text-sm">Medical & Group Health</span>
-                <span class="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600">
-                  Active
-                </span>
-              </div>
-              <p class="text-slate-500">Policy: Cigna Global Comprehensive (PPO)</p>
-              <p class="text-slate-500">Policy Member ID: AGM-INS-88231</p>
-            </div>
           </div>
         </div>
 
@@ -423,7 +540,8 @@ const estimatedNetPay = computed(() => monthlyGross.value - (estimatedTds.value 
 
           <div class="space-y-3">
             <button
-              @click="isLifecycleModalOpen = true"
+              v-if="canEditEmployee"
+          @click="openLifecycleModal"
               class="w-full text-left p-3.5 rounded-2xl bg-indigo-50/50 dark:bg-indigo-950/20 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900/40 transition-colors flex items-center justify-between"
             >
               <div>
@@ -434,7 +552,8 @@ const estimatedNetPay = computed(() => monthlyGross.value - (estimatedTds.value 
             </button>
 
             <button
-              @click="isDocModalOpen = true"
+              v-if="canUploadDocuments"
+          @click="isDocModalOpen = true"
               class="w-full text-left p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/40 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200/60 dark:border-slate-800 transition-colors flex items-center justify-between"
             >
               <div>
@@ -476,19 +595,19 @@ const estimatedNetPay = computed(() => monthlyGross.value - (estimatedTds.value 
           </div>
           <div class="space-y-1">
             <span class="text-slate-400 font-medium">Date of Birth</span>
-            <p class="font-bold text-slate-800 dark:text-slate-200 text-sm">October 14, 1991</p>
+            <p class="font-bold text-slate-800 dark:text-slate-200 text-sm">{{ formatDate(employee.dateOfBirth) }}</p>
           </div>
           <div class="space-y-1">
             <span class="text-slate-400 font-medium">Gender</span>
-            <p class="font-bold text-slate-800 dark:text-slate-200 text-sm">Prefer to state</p>
+            <p class="font-bold text-slate-800 dark:text-slate-200 text-sm">{{ employee.gender || '—' }}</p>
           </div>
           <div class="space-y-1">
             <span class="text-slate-400 font-medium">Nationality</span>
-            <p class="font-bold text-slate-800 dark:text-slate-200 text-sm">United States</p>
+            <p class="font-bold text-slate-800 dark:text-slate-200 text-sm">{{ employee.nationality || '—' }}</p>
           </div>
           <div class="space-y-1">
             <span class="text-slate-400 font-medium">Marital Status</span>
-            <p class="font-bold text-slate-800 dark:text-slate-200 text-sm">Married</p>
+            <p class="font-bold text-slate-800 dark:text-slate-200 text-sm">{{ employee.maritalStatus || '—' }}</p>
           </div>
         </div>
 
@@ -501,7 +620,7 @@ const estimatedNetPay = computed(() => monthlyGross.value - (estimatedTds.value 
             </div>
             <div class="space-y-1">
               <span class="text-slate-400 font-medium">Personal Email</span>
-              <p class="font-bold text-slate-800 dark:text-slate-200 text-sm">{{ (employee.firstName || 'user').toLowerCase() }}.personal@gmail.com</p>
+              <p class="font-bold text-slate-800 dark:text-slate-200 text-sm">{{ employee.personalEmail || '—' }}</p>
             </div>
             <div class="space-y-1">
               <span class="text-slate-400 font-medium">Mobile Phone</span>
@@ -513,9 +632,11 @@ const estimatedNetPay = computed(() => monthlyGross.value - (estimatedTds.value 
         <div class="pt-6 border-t border-slate-100 dark:border-slate-800">
           <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4">Residential Address</h3>
           <div class="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/60 dark:border-slate-800 text-xs text-slate-600 dark:text-slate-300 space-y-1">
-            <p class="font-bold text-slate-800 dark:text-slate-100 text-sm">742 Evergreen Terrace</p>
-            <p>San Francisco, CA 94107, United States</p>
-            <p class="text-[11px] text-slate-400">Proof of residence verified via Utility Bill on file</p>
+            <template v-if="addressLines.length">
+              <p class="font-bold text-slate-800 dark:text-slate-100 text-sm">{{ addressLines[0] }}</p>
+              <p v-if="addressLines[1]">{{ addressLines[1] }}</p>
+            </template>
+            <p v-else class="text-slate-400">No address on file</p>
           </div>
         </div>
       </div>
@@ -542,11 +663,11 @@ const estimatedNetPay = computed(() => monthlyGross.value - (estimatedTds.value 
           </div>
           <div class="space-y-1">
             <span class="text-slate-400 font-medium">Salary Grade Band</span>
-            <p class="font-bold text-slate-800 dark:text-slate-200 text-sm">{{ employee.grade || 'Professional / Lead (P1-P3)' }}</p>
+            <p class="font-bold text-slate-800 dark:text-slate-200 text-sm">{{ employee.grade || '—' }}</p>
           </div>
           <div class="space-y-1">
             <span class="text-slate-400 font-medium">Assigned Branch / Location</span>
-            <p class="font-bold text-slate-800 dark:text-slate-200 text-sm">{{ employee.branch || 'San Francisco HQ' }}</p>
+            <p class="font-bold text-slate-800 dark:text-slate-200 text-sm">{{ employee.branch || '—' }}</p>
           </div>
           <div class="space-y-1">
             <span class="text-slate-400 font-medium">Employment Type</span>
@@ -558,11 +679,41 @@ const estimatedNetPay = computed(() => monthlyGross.value - (estimatedTds.value 
           </div>
           <div class="space-y-1">
             <span class="text-slate-400 font-medium">Reporting Manager</span>
-            <p class="font-bold text-slate-800 dark:text-slate-200 text-sm">{{ employee.reportingManagerName || 'Sarah Connor' }}</p>
+            <p class="font-bold text-slate-800 dark:text-slate-200 text-sm">{{ employee.reportingManagerName || 'Not assigned' }}</p>
           </div>
           <div class="space-y-1">
             <span class="text-slate-400 font-medium">Shift Assignment</span>
-            <p class="font-bold text-slate-800 dark:text-slate-200 text-sm">General Day Shift (09:00 AM - 06:00 PM)</p>
+            <p class="font-bold text-slate-800 dark:text-slate-200 text-sm">{{ employee.shift || 'Not assigned' }}</p>
+          </div>
+          <div class="space-y-1">
+            <span class="text-slate-400 font-medium">Team Lead</span>
+            <p class="font-bold text-slate-800 dark:text-slate-200 text-sm">{{ employee.teamLeadName || 'Not assigned' }}</p>
+          </div>
+          <div class="space-y-1">
+            <span class="text-slate-400 font-medium">Approval Workflow</span>
+            <p class="font-bold text-slate-800 dark:text-slate-200 text-sm">{{ employee.approvalWorkflow || 'Company default' }}</p>
+          </div>
+          <div class="space-y-1">
+            <span class="text-slate-400 font-medium">Login Access</span>
+            <p class="font-bold text-sm" :class="employee.hasLogin ? (employee.loginPending ? 'text-amber-600' : 'text-emerald-600') : 'text-slate-500'">
+              {{ employee.hasLogin ? (employee.loginPending ? 'Created — waiting for first sign-in' : 'Active') : 'No login' }}
+            </p>
+            <div v-if="canManageAccounts" class="flex gap-2 pt-1">
+              <button
+                v-if="!employee.hasLogin" type="button" :disabled="isAccountBusy"
+                class="px-3 py-1.5 rounded-lg bg-[#1989d9] text-white text-[11px] font-semibold disabled:opacity-50"
+                @click="createLogin"
+              >
+                Create login
+              </button>
+              <button
+                v-else-if="employee.loginPending" type="button" :disabled="isAccountBusy"
+                class="px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-[11px] font-semibold disabled:opacity-50"
+                @click="resendLogin"
+              >
+                Resend login details
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -582,26 +733,27 @@ const estimatedNetPay = computed(() => monthlyGross.value - (estimatedTds.value 
             </div>
           </div>
 
+          <p v-if="!latestPayslip" class="text-xs text-slate-400">No payslip yet — the monthly breakdown appears after the first payroll run.</p>
+          <p v-else class="text-xs text-slate-400">From the {{ latestPayslip.monthYear }} payslip.</p>
           <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <div class="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/60 dark:border-slate-800">
               <span class="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">Monthly Gross</span>
-              <p class="text-base font-extrabold text-slate-900 dark:text-white mt-1">{{ formatCurrency(monthlyGross) }}</p>
-              <p class="text-[10px] text-slate-400 mt-0.5">Calculated as Base / 12</p>
+              <p class="text-base font-extrabold text-slate-900 dark:text-white mt-1">{{ formatCurrency(latestPayslip?.breakdown.grossEarnings) }}</p>
             </div>
             <div class="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/60 dark:border-slate-800">
-              <span class="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">Basic Pay (50%)</span>
-              <p class="text-base font-extrabold text-emerald-600 dark:text-emerald-400 mt-1">{{ formatCurrency(monthlyBasic) }}</p>
-              <p class="text-[10px] text-slate-400 mt-0.5">Statutory base rate</p>
+              <span class="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">Basic Pay</span>
+              <p class="text-base font-extrabold text-emerald-600 dark:text-emerald-400 mt-1">{{ formatCurrency(latestPayslip?.breakdown.basic) }}</p>
             </div>
             <div class="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/60 dark:border-slate-800">
               <span class="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">HRA & Allowances</span>
-              <p class="text-base font-extrabold text-purple-600 dark:text-purple-400 mt-1">{{ formatCurrency(monthlyHra + monthlyAllowance) }}</p>
-              <p class="text-[10px] text-slate-400 mt-0.5">Housing + Special stipend</p>
+              <p class="text-base font-extrabold text-purple-600 dark:text-purple-400 mt-1">
+                {{ latestPayslip ? formatCurrency(latestPayslip.breakdown.hra + latestPayslip.breakdown.specialAllowance + latestPayslip.breakdown.conveyance) : '—' }}
+              </p>
             </div>
             <div class="p-4 rounded-2xl bg-indigo-50/60 dark:bg-indigo-950/30 border border-indigo-200/60 dark:border-indigo-900/50">
-              <span class="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider block">Estimated Monthly Net</span>
-              <p class="text-base font-extrabold text-indigo-600 dark:text-indigo-400 mt-1">{{ formatCurrency(estimatedNetPay) }}</p>
-              <p class="text-[10px] text-indigo-500/80 mt-0.5">After tax & deductions</p>
+              <span class="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider block">Monthly Net Pay</span>
+              <p class="text-base font-extrabold text-indigo-600 dark:text-indigo-400 mt-1">{{ formatCurrency(latestPayslip?.breakdown.netPay) }}</p>
+              <p v-if="latestPayslip" class="text-[10px] text-indigo-500/80 mt-0.5">After tax & deductions</p>
             </div>
           </div>
         </div>
@@ -618,8 +770,8 @@ const estimatedNetPay = computed(() => monthlyGross.value - (estimatedTds.value 
                 <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Configured payroll account for automated direct deposit</p>
               </div>
             </div>
-            <span class="px-3 py-1 rounded-full text-xs font-bold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 border border-emerald-200 dark:border-emerald-800">
-              Active Deposit Account
+            <span v-if="employee.bankDetails" class="px-3 py-1 rounded-full text-xs font-bold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 border border-emerald-200 dark:border-emerald-800">
+              Account on file
             </span>
           </div>
 
@@ -627,7 +779,7 @@ const estimatedNetPay = computed(() => monthlyGross.value - (estimatedTds.value 
             <div class="space-y-1">
               <span class="text-slate-400 font-medium">Bank Name</span>
               <p class="font-bold text-slate-800 dark:text-slate-200 text-sm">
-                {{ employee.bankDetails?.bankName || 'JPMorgan Chase & Co.' }}
+                {{ employee.bankDetails?.bankName || '—' }}
               </p>
             </div>
             <div class="space-y-1">
@@ -639,24 +791,24 @@ const estimatedNetPay = computed(() => monthlyGross.value - (estimatedTds.value 
             <div class="space-y-1">
               <span class="text-slate-400 font-medium">Account Number</span>
               <p class="font-bold text-slate-800 dark:text-slate-200 text-sm font-mono">
-                {{ employee.bankDetails?.accountNumber || '•••••••• 4892' }}
+                {{ employee.bankDetails?.accountNumber || '—' }}
               </p>
             </div>
             <div class="space-y-1">
-              <span class="text-slate-400 font-medium">Routing Number (ACH / SWIFT)</span>
+              <span class="text-slate-400 font-medium">IFSC / Routing Code</span>
               <p class="font-bold text-slate-800 dark:text-slate-200 text-sm font-mono">
-                {{ employee.bankDetails?.routingCode || '021000021' }}
+                {{ employee.bankDetails?.routingCode || '—' }}
               </p>
             </div>
             <div class="space-y-1">
               <span class="text-slate-400 font-medium">Account Classification</span>
               <p class="font-bold text-slate-800 dark:text-slate-200 text-sm">
-                {{ employee.bankDetails?.accountType || 'Checking (Direct Deposit)' }}
+                {{ employee.bankDetails?.accountType || '—' }}
               </p>
             </div>
             <div class="space-y-1">
-              <span class="text-slate-400 font-medium">Verification Method</span>
-              <p class="font-bold text-emerald-600 dark:text-emerald-400 text-sm">Automated Micro-Deposit Verified</p>
+              <span class="text-slate-400 font-medium">PAN / UAN</span>
+              <p class="font-bold text-slate-800 dark:text-slate-200 text-sm font-mono">{{ employee.panNumber || '—' }} / {{ employee.uanNumber || '—' }}</p>
             </div>
           </div>
         </div>
@@ -670,7 +822,8 @@ const estimatedNetPay = computed(() => monthlyGross.value - (estimatedTds.value 
             <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Legal, contractual, and identity compliance files</p>
           </div>
           <button
-            @click="isDocModalOpen = true"
+            v-if="canUploadDocuments"
+          @click="isDocModalOpen = true"
             class="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs shadow-md shadow-indigo-600/20 transition-all self-start"
           >
             <Plus class="w-4 h-4" />
@@ -719,7 +872,18 @@ const estimatedNetPay = computed(() => monthlyGross.value - (estimatedTds.value 
                 {{ doc.status }}
               </span>
 
-              <div v-if="doc.status === 'Pending'" class="flex items-center gap-1">
+              <button
+                v-if="doc.hasFile !== false"
+                @click="handleViewDoc(doc.id)"
+                :disabled="viewingDocId === doc.id"
+                title="View Document"
+                class="flex items-center gap-1 px-2 py-1 rounded-md bg-sky-50 dark:bg-sky-950 text-[#1989d9] text-[10px] font-bold hover:bg-sky-100 dark:hover:bg-sky-900 transition-colors disabled:opacity-50"
+              >
+                <Eye class="w-3.5 h-3.5" />
+                {{ viewingDocId === doc.id ? 'Opening…' : 'View' }}
+              </button>
+
+              <div v-if="doc.status === 'Pending' && canVerifyDocuments" class="flex items-center gap-1">
                 <button
                   @click="handleVerifyDoc(doc.id, 'Verified')"
                   title="Verify Document"
@@ -748,7 +912,8 @@ const estimatedNetPay = computed(() => monthlyGross.value - (estimatedTds.value 
             <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Chronological record of promotions, transfers, and designations</p>
           </div>
           <button
-            @click="isLifecycleModalOpen = true"
+            v-if="canEditEmployee"
+          @click="openLifecycleModal"
             class="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs shadow-md shadow-indigo-600/20 transition-all self-start"
           >
             <Plus class="w-4 h-4" />
@@ -810,7 +975,7 @@ const estimatedNetPay = computed(() => monthlyGross.value - (estimatedTds.value 
             <div class="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/60 dark:border-slate-800 space-y-1">
               <div class="flex items-center justify-between">
                 <span class="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400">
-                  Joined Agam Technologies
+                  Joined {{ company?.name || 'the company' }}
                 </span>
                 <span class="text-[10px] text-slate-400">{{ employee.joiningDate }}</span>
               </div>
@@ -872,7 +1037,7 @@ const estimatedNetPay = computed(() => monthlyGross.value - (estimatedTds.value 
           <FormInput
             name="newSalary"
             type="number"
-            label="New Annual Salary (USD)"
+            :label="`New Annual Salary${currencySymbol ? ` (${currencySymbol})` : ''}`"
             placeholder="125000"
             required
           />
@@ -942,28 +1107,21 @@ const estimatedNetPay = computed(() => monthlyGross.value - (estimatedTds.value 
             >
               <option value="Contract">Employment Contract / Offer</option>
               <option value="ID Proof">Government ID / Passport</option>
-              <option value="Degree">Educational Degree / Transcript</option>
-              <option value="Tax Form">W-4 / Tax Exemption Form</option>
+              <option value="Educational">Educational Degree / Transcript</option>
+              <option value="Tax">Tax Document</option>
               <option value="Certification">Professional Certification</option>
-              <option value="Other">Other Document</option>
             </select>
           </div>
 
-          <div>
-            <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">Simulated File Size</label>
-            <input
-              v-model="docFileSize"
-              type="text"
-              placeholder="e.g. 2.4 MB"
-              class="w-full px-3.5 py-2 text-xs bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-xl focus:outline-hidden focus:border-indigo-500 text-slate-800 dark:text-slate-200"
-            />
-          </div>
-
-          <div class="p-6 rounded-2xl border-2 border-dashed border-slate-200 dark:border-slate-700 text-center bg-slate-50/50 dark:bg-slate-800/20">
+          <label class="block p-6 rounded-2xl border-2 border-dashed border-slate-200 dark:border-slate-700 text-center bg-slate-50/50 dark:bg-slate-800/20 cursor-pointer hover:border-indigo-400">
             <UploadCloud class="w-8 h-8 text-indigo-500 mx-auto mb-2" />
-            <p class="text-xs font-semibold text-slate-700 dark:text-slate-300">File Selected for Encryption</p>
-            <p class="text-[10px] text-slate-400 mt-0.5">Encrypted at rest using AES-256 vault standard</p>
-          </div>
+            <p class="text-xs font-semibold text-slate-700 dark:text-slate-300">
+              {{ docFile ? `${docFile.name} (${humanSize(docFile.size)})` : 'Choose a file' }}
+            </p>
+            <p class="text-[10px] text-slate-400 mt-0.5">PDF, JPG or PNG up to 10 MB</p>
+            <input type="file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" class="hidden" @change="onDocFileChange" />
+          </label>
+          <p v-if="docError" class="text-xs font-medium text-rose-600" role="alert">{{ docError }}</p>
 
           <div class="flex items-center justify-end gap-3 pt-4 border-t border-slate-100 dark:border-slate-800">
             <button
