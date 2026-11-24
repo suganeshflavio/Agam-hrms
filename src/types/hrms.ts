@@ -90,6 +90,8 @@ export interface EmployeeDocument {
   uploadDate: string
   fileSize: string
   status: 'Verified' | 'Pending' | 'Rejected'
+  /** False for metadata-only records with no uploaded file. */
+  hasFile?: boolean
 }
 
 export interface TransferPromotionRecord {

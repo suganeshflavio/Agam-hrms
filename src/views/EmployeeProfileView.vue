@@ -28,10 +28,11 @@ import {
   X,
   ExternalLink,
   Landmark,
+  Eye,
 } from '@lucide/vue'
 import { hrmsApi } from '@/redux/api/hrmsApi'
 import { useApiQuery, useApiMutation, useAppDispatch } from '@/redux/vueAdapter'
-import { apiRequest, type ApiError } from '@/services/apiClient'
+import { apiBlob, apiRequest, type ApiError } from '@/services/apiClient'
 import type { Employee, Department, Designation, Grade, EmployeeDocument, Payslip, CompanyInfo } from '@/types/hrms'
 import { useMoney } from '@/composables/useMoney'
 import { usePermissions } from '@/composables/usePermissions'
@@ -229,6 +230,29 @@ const handleVerifyDoc = async (docId: string, status: 'Verified' | 'Rejected') =
     status,
   })
   showFeedback(`Document marked as ${status}`)
+}
+
+// Opens the document in a new tab. The file is fetched with the user's token,
+// so access follows the same rules as the backend (HR or the employee themself).
+const viewingDocId = ref('')
+const handleViewDoc = async (docId: string) => {
+  if (!employee.value) return
+  docError.value = ''
+  viewingDocId.value = docId
+  const tab = window.open('', '_blank') // opened now so the browser doesn't block it as a pop-up
+  try {
+    const blob = await apiBlob(`/employees/employees/${employee.value.id}/documents/${docId}/download`, { disposition: 'inline' })
+    const url = URL.createObjectURL(blob)
+    if (tab) tab.location.href = url
+    else window.open(url, '_blank')
+    setTimeout(() => URL.revokeObjectURL(url), 60_000)
+  } catch (err) {
+    tab?.close()
+    docError.value = (err as ApiError).data || 'Could not open the document'
+    showFeedback(docError.value)
+  } finally {
+    viewingDocId.value = ''
+  }
 }
 
 // Formatting & Helpers
@@ -847,6 +871,17 @@ const probationLabel = computed(() => {
               >
                 {{ doc.status }}
               </span>
+
+              <button
+                v-if="doc.hasFile !== false"
+                @click="handleViewDoc(doc.id)"
+                :disabled="viewingDocId === doc.id"
+                title="View Document"
+                class="flex items-center gap-1 px-2 py-1 rounded-md bg-sky-50 dark:bg-sky-950 text-[#1989d9] text-[10px] font-bold hover:bg-sky-100 dark:hover:bg-sky-900 transition-colors disabled:opacity-50"
+              >
+                <Eye class="w-3.5 h-3.5" />
+                {{ viewingDocId === doc.id ? 'Opening…' : 'View' }}
+              </button>
 
               <div v-if="doc.status === 'Pending' && canVerifyDocuments" class="flex items-center gap-1">
                 <button

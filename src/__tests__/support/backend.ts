@@ -31,6 +31,7 @@ export const makeUser = (
     name: `${role} Tester`,
     email: `${role.toLowerCase().replace(/ /g, '.')}@example.test`,
     role,
+    dataScope: full ? 'all' : /manager/i.test(role) ? 'team' : 'own',
     department: 'Engineering',
     designation: 'Engineer',
     permissions: MODULES.map((module) => ({

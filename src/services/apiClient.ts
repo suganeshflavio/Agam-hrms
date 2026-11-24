@@ -116,6 +116,29 @@ export async function apiRequest<T = any>(path: string, options: RequestOptions 
   return json.data as T
 }
 
+/** Fetches a file (e.g. an employee document) with the user's token. */
+export async function apiBlob(path: string, query?: RequestOptions['query']): Promise<Blob> {
+  if (!tokenStore.get()) throw { status: 401, data: 'Not signed in' } as ApiError
+  await refreshIfNeeded()
+  const params = new URLSearchParams()
+  Object.entries(query || {}).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') params.set(key, String(value))
+  })
+  const url = `${API_BASE_URL}${path}${params.toString() ? `?${params}` : ''}`
+  let res: Response
+  try {
+    res = await fetch(url, { headers: { Authorization: `Bearer ${tokenStore.get()}` } })
+  } catch {
+    throw { status: 0, data: 'Unable to reach the HRMS server. Please check your connection.' } as ApiError
+  }
+  if (res.status === 401) {
+    tokenStore.clear()
+    onUnauthorized?.()
+  }
+  if (!res.ok) throw await toError(res)
+  return res.blob()
+}
+
 /** Wraps an API call for RTK Query's queryFn: returns `{ data }` or `{ error }`. */
 export async function runQuery<T>(
   live: () => Promise<T>,

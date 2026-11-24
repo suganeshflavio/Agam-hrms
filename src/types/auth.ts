@@ -38,6 +38,8 @@ export interface AuthUser {
   name: string
   email: string
   role: SystemRoleType
+  /** Whose records the user can reach: all (Super Admin/HR), team (managers), own, none. */
+  dataScope?: 'all' | 'team' | 'own' | 'none'
   department: string
   designation: string
   avatar?: string

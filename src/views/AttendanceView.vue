@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import {
   Clock,
   Calendar,
@@ -31,9 +31,14 @@ const currentUserName = computed(() => currentUser.value?.name || '')
 const currentUserRole = computed(() => currentUser.value?.role || '—')
 const hasEmployeeProfile = computed(() => !!currentUser.value?.employeeId)
 const noProfileHint = "Your login isn't linked to an employee profile. Add yourself as an employee with your login email."
-// Access from Roles & Permissions: Attendance row.
+// Whose attendance the user sees comes from their role (data scope):
+// Super Admin / HR -> everyone, Managers -> their team, General Employee -> only their own calendar.
+// Shift templates are company-wide, so only Super Admin / HR manage them.
 const { can } = usePermissions()
-const canViewAll = computed(() => can('attendance', 'view'))
+const dataScope = computed(() => currentUser.value?.dataScope || 'own')
+const showRegister = computed(() => dataScope.value === 'all' || dataScope.value === 'team')
+const canViewAll = computed(() => dataScope.value === 'all')
+const registerLabel = computed(() => (dataScope.value === 'all' ? 'Department Register' : 'Team Register'))
 
 // Redux Queries & Mutations
 const { data: attendance } = useApiQuery<AttendanceRecord[]>(hrmsApi.endpoints.getAttendance)
@@ -143,7 +148,10 @@ const handleDeleteShift = async (s: Shift) => {
 }
 
 // Tabs & State
-const activeTab = ref<'daily' | 'shifts'>('daily')
+const activeTab = ref<'daily' | 'calendar' | 'shifts'>(showRegister.value ? 'daily' : 'calendar')
+watch(showRegister, (show) => {
+  if (!show && activeTab.value !== 'calendar') activeTab.value = 'calendar'
+})
 const notification = ref('')
 const currentTime = ref(new Date().toLocaleTimeString())
 let timer: any = null
@@ -294,18 +302,33 @@ const handleClockAction = async () => {
     </div>
 
     <!-- Navigation Tabs -->
-    <div class="flex items-center gap-2 border-b border-slate-200 dark:border-slate-800 pb-3">
+    <div class="flex items-center gap-2 border-b border-slate-200 dark:border-slate-800 pb-3 overflow-x-auto">
       <button
+        v-if="hasEmployeeProfile"
+        @click="activeTab = 'calendar'"
+        :class="[
+          'px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer whitespace-nowrap',
+          activeTab === 'calendar'
+            ? 'bg-[#1989d9] text-white shadow-sm shadow-[#1989d9]/30'
+            : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800'
+        ]"
+      >
+        <CalendarDays class="w-4 h-4" />
+        <span>My Attendance Calendar</span>
+      </button>
+
+      <button
+        v-if="showRegister"
         @click="activeTab = 'daily'"
         :class="[
-          'px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer',
+          'px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer whitespace-nowrap',
           activeTab === 'daily'
             ? 'bg-[#1989d9] text-white shadow-sm shadow-[#1989d9]/30'
             : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800'
         ]"
       >
         <Clock class="w-4 h-4" />
-        <span>{{ canViewAll ? 'Department Register' : 'My Attendance Calendar' }}</span>
+        <span>{{ registerLabel }}</span>
       </button>
 
       <!-- Shift Templates: Only Admin can see -->
@@ -313,7 +336,7 @@ const handleClockAction = async () => {
         v-if="canViewAll"
         @click="activeTab = 'shifts'"
         :class="[
-          'px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer',
+          'px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer whitespace-nowrap',
           activeTab === 'shifts'
             ? 'bg-[#1989d9] text-white shadow-sm shadow-[#1989d9]/30'
             : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800'
@@ -325,9 +348,11 @@ const handleClockAction = async () => {
     </div>
 
     <!-- TAB 1: Super Admin / HR see a department-wise register; everyone else sees their own calendar -->
-    <div v-if="activeTab === 'daily'">
-      <DepartmentAttendanceRegister v-if="canViewAll" />
-      <AttendanceCalendar v-else-if="hasEmployeeProfile" />
+    <div v-if="activeTab === 'daily' && showRegister">
+      <DepartmentAttendanceRegister />
+    </div>
+    <div v-if="activeTab === 'calendar'">
+      <AttendanceCalendar v-if="hasEmployeeProfile" />
       <div v-else class="p-10 rounded-3xl border border-dashed border-slate-300 dark:border-slate-700 text-center text-sm text-slate-500">
         {{ noProfileHint }}
       </div>

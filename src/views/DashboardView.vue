@@ -20,7 +20,8 @@ import type { HRMSStats, LeaveRequest, AttendanceRecord, Employee } from '@/type
 
 // Access follows HR Administration -> Roles & Permissions.
 const { user: authUser, can, hasEmployeeProfile } = usePermissions()
-const canViewOrganization = computed(() => can('employees', 'view') || can('attendance', 'view'))
+// Whose records the backend returns: all (Super Admin/HR), team (managers), own (General Employee).
+const canViewOrganization = computed(() => authUser.value?.dataScope === 'all')
 const canViewAllAttendance = computed(() => can('attendance', 'view'))
 const canViewAllLeaves = computed(() => can('leaves', 'view'))
 // Logins without an employee profile cannot punch attendance.
@@ -41,12 +42,8 @@ const [recordAttendance, { isLoading: punchingAttendance }] = useApiMutation(
   hrmsApi.endpoints.recordAttendance
 )
 
-// The signed-in employee plus their direct reports (used without organisation-wide access).
-const teamIds = computed(() => {
-  const myId = currentUserId.value
-  if (!myId) return new Set<string>()
-  return new Set((employees.value || []).filter((e) => e.id === myId || e.reportingManagerId === myId).map((e) => e.id))
-})
+// The backend already limits the employee list to the user's scope (own, or own + team).
+const teamIds = computed(() => new Set((employees.value || []).map((e) => e.id)))
 
 // Headcount & Presence Metrics
 const scopedHeadcount = computed(() => {
