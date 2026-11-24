@@ -126,6 +126,8 @@ export interface Employee {
   
   // Employment Details
   role?: string
+  /** Ids of the roles (from Roles & Permissions) held by this employee's login. */
+  roleIds?: string[]
   department: string
   designation: string
   grade: string

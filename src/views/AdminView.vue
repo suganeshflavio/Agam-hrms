@@ -212,9 +212,9 @@ const activeRole = computed(() => {
 })
 
 const assignedRoleUsers = computed(() => {
-  const roleName = activeRole.value?.roleName
-  if (!roleName) return []
-  return (employees.value || []).filter((e) => e.role === roleName)
+  const role = activeRole.value
+  if (!role) return []
+  return (employees.value || []).filter((e) => e.roleIds?.includes(role.id) || e.role === role.roleName)
 })
 
 const isAddRoleModalOpen = ref(false)
