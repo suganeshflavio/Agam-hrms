@@ -64,12 +64,22 @@ const toggleShiftDay = (day: string) => {
   }
 }
 
+// <input type="time"> uses 24-hour "HH:MM"; the API returns "09:00 AM".
+const to24h = (value: string) => {
+  const m = /^(\d{1,2}):(\d{2})\s*(AM|PM)?$/i.exec((value || '').trim())
+  if (!m) return ''
+  let h = Number(m[1]) % 12
+  if (!m[3]) h = Number(m[1])
+  else if (m[3].toUpperCase() === 'PM') h += 12
+  return `${String(h).padStart(2, '0')}:${m[2]}`
+}
+
 const openAddShiftModal = () => {
   isEditingShift.value = false
   editingShiftId.value = null
   shiftName.value = ''
-  shiftStartTime.value = ''
-  shiftEndTime.value = ''
+  shiftStartTime.value = '09:00'
+  shiftEndTime.value = '18:00'
   shiftGraceMinutes.value = 0
   shiftActiveDays.value = []
   isShiftModalOpen.value = true
@@ -79,8 +89,8 @@ const openEditShiftModal = (s: Shift) => {
   isEditingShift.value = true
   editingShiftId.value = s.id
   shiftName.value = s.name
-  shiftStartTime.value = s.startTime
-  shiftEndTime.value = s.endTime
+  shiftStartTime.value = to24h(s.startTime)
+  shiftEndTime.value = to24h(s.endTime)
   shiftGraceMinutes.value = s.graceMinutes
   shiftActiveDays.value = [...s.activeDays]
   isShiftModalOpen.value = true
@@ -447,9 +457,9 @@ const handleClockAction = async () => {
               </label>
               <input
                 v-model="shiftStartTime"
-                placeholder="09:00 AM"
+                type="time"
                 required
-                class="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-mono font-semibold focus:outline-hidden focus:border-[#1989d9]"
+                class="w-full cursor-pointer px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-mono font-semibold focus:outline-hidden focus:border-[#1989d9]"
               />
             </div>
             <div>
@@ -458,9 +468,9 @@ const handleClockAction = async () => {
               </label>
               <input
                 v-model="shiftEndTime"
-                placeholder="06:00 PM"
+                type="time"
                 required
-                class="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-mono font-semibold focus:outline-hidden focus:border-[#1989d9]"
+                class="w-full cursor-pointer px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-mono font-semibold focus:outline-hidden focus:border-[#1989d9]"
               />
             </div>
           </div>
