@@ -94,9 +94,9 @@ const sections: { title: string; fields: Field[] }[][] = [
     {
       title: 'Basic details',
       fields: [
-        { key: 'firstName', label: 'First Name', required: true, placeholder: 'e.g. Bala' },
-        { key: 'middleName', label: 'Middle Name' },
-        { key: 'lastName', label: 'Last Name', required: true, placeholder: 'e.g. Murugan' },
+        { key: 'firstName', label: 'First Name', required: true, placeholder: 'Enter your first name' },
+        { key: 'middleName', label: 'Middle Name', placeholder: 'Enter your middle name' },
+        { key: 'lastName', label: 'Last Name', required: true, placeholder: 'Enter your last name' },
         { key: 'dateOfBirth', label: 'Date of Birth', type: 'date', required: true,
           validate: (v) => (v && v > minimumBirthDate ? 'Employee must be at least 16 years old' : null) },
         { key: 'gender', label: 'Gender', type: 'select', required: true, options: () => opt(['Male', 'Female', 'Non-binary', 'Other', 'Prefer not to say']) },
