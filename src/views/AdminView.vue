@@ -99,7 +99,7 @@ const saveCompany = async () => {
 }
 
 // ---- Approval workflows (create / rename / activate / delete)
-const workflowModules = ['Leave', 'Expense', 'Promotion', 'Resignation', 'Requisition'] as const
+const workflowModules = ['Leave', 'WFH', 'Expense', 'Promotion', 'Resignation', 'Requisition'] as const
 const isWorkflowModalOpen = ref(false)
 const wfForm = ref({ id: '', name: '', module: 'Leave' as ApprovalWorkflow['module'], status: 'Active' as ApprovalWorkflow['status'], firstApprover: 'Reporting Manager' })
 const wfError = ref('')
@@ -412,7 +412,7 @@ const handleCreateRole = async () => {
     </div>
 
     <!-- Navigation Tabs -->
-    <div class="flex flex-wrap items-center gap-2 border-b border-slate-200 dark:border-slate-800 pb-3">
+    <div class="scroll-row items-center gap-2 border-b border-slate-200 dark:border-slate-800 pb-3">
       <button
         v-for="t in [
           { id: 'company', label: 'Company Profile', icon: Building },

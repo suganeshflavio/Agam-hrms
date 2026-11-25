@@ -71,7 +71,7 @@ export interface RolePermission {
 export interface ApprovalWorkflow {
   id: string
   workflowName: string
-  module: 'Leave' | 'Expense' | 'Promotion' | 'Resignation' | 'Requisition'
+  module: 'Leave' | 'WFH' | 'Expense' | 'Promotion' | 'Resignation' | 'Requisition'
   levels: {
     level: number
     approverRole: string
@@ -265,7 +265,7 @@ export interface AttendanceRecord {
 }
 
 export type AttendanceDayStatus =
-  | 'present' | 'late' | 'half_day' | 'absent' | 'on_leave' | 'holiday' | 'weekly_off' | 'not_marked' | 'upcoming'
+  | 'present' | 'late' | 'half_day' | 'absent' | 'wfh' | 'on_leave' | 'holiday' | 'weekly_off' | 'not_marked' | 'upcoming'
 
 export interface AttendanceRegisterRow {
   employeeId: string
@@ -295,7 +295,7 @@ export interface AttendanceRegister {
 export interface AttendanceCalendar {
   month: string
   employeeId: string
-  days: { date: string; status: AttendanceDayStatus; leaveType?: string; checkIn?: string; checkOut?: string; workHours?: number }[]
+  days: { date: string; status: AttendanceDayStatus; leaveType?: string; checkIn?: string; checkOut?: string; workHours?: number; wfhPending?: boolean; location?: WorkLocation | 'WFH' }[]
   summary: Partial<Record<AttendanceDayStatus, number>>
 }
 
@@ -517,3 +517,51 @@ export interface HRMSDashboardStats {
 }
 
 export type HRMSStats = HRMSDashboardStats
+
+/** A work-from-home application for a date range; approved days show as WFH in attendance. */
+export interface RemoteWorkRequest {
+  id: string
+  employeeId: string
+  employeeName: string
+  fromDate: string
+  toDate: string
+  days: number
+  reason: string
+  status: 'Pending' | 'Approved' | 'Rejected' | 'Cancelled'
+  appliedOn: string
+  canAct?: boolean
+  canCancel?: boolean
+}
+
+export interface Resignation {
+  id: string
+  employeeId: string
+  employeeName: string
+  employeeCode: string
+  department: string
+  designation: string
+  submittedOn: string
+  proposedLastDay: string
+  lastWorkingDay?: string
+  noticeDays: number
+  reason: string
+  status: 'Pending' | 'Approved' | 'Rejected' | 'Withdrawn' | 'Completed'
+  canAct?: boolean
+  canWithdraw?: boolean
+}
+
+export type WorkLocation = 'Office' | 'Client location'
+
+/** Today's clock state for the signed-in employee (GET /app/attendance/today). */
+export interface PunchState {
+  employeeId: string
+  clockedIn: boolean
+  location?: WorkLocation
+  since?: string
+  /** Clocked out for the day: further work is claimed with a regularization. */
+  doneForDay?: boolean
+  office?: { location: WorkLocation; checkIn: string; checkOut?: string }
+  /** Work from home applied for today. */
+  wfhToday?: 'Approved' | 'Pending'
+  record?: AttendanceRecord
+}

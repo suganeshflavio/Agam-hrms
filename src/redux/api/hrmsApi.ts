@@ -17,6 +17,10 @@ import type {
   AttendanceRegister,
   AttendanceCalendar,
   RegularizationRequest,
+  RemoteWorkRequest,
+  PunchState,
+  WorkLocation,
+  Resignation,
   LeaveTypePolicy,
   Holiday,
   LeaveRequest,
@@ -40,6 +44,9 @@ export const hrmsApi = createApi({
     'Shifts',
     'Attendance',
     'Regularizations',
+    'RemoteWork',
+    'PunchState',
+    'Resignations',
     'Leaves',
     'Payroll',
     'MasterData',
@@ -343,15 +350,25 @@ export const hrmsApi = createApi({
       },
       providesTags: ['Attendance'],
     }),
-    recordAttendance: builder.mutation<AttendanceRecord, { employeeId: string; employeeName: string }>({
-      async queryFn({ employeeId, employeeName }) {
-        return runQuery(() => apiRequest('/app/attendance/punch', { method: 'POST', body: { employeeId } }))
+    // Clock In / Clock Out with a work location (Office by default, or Client location).
+    recordAttendance: builder.mutation<PunchState, { employeeId: string; location?: WorkLocation }>({
+      async queryFn({ employeeId, location }) {
+        return runQuery(() => apiRequest('/app/attendance/punch', { method: 'POST', body: { employeeId, location } }))
       },
-      invalidatesTags: ['Attendance', 'Stats'],
+      invalidatesTags: ['Attendance', 'Stats', 'PunchState', 'RemoteWork'],
     }),
-    getRegularizations: builder.query<RegularizationRequest[], void>({
-      async queryFn() {
-        return runQuery(() => apiRequest('/app/regularizations'))
+    /** Today's clock state; returns null for logins without an employee profile. */
+    getPunchState: builder.query<PunchState | null, string>({
+      async queryFn(employeeId) {
+        if (!employeeId) return { data: null }
+        return runQuery(() => apiRequest('/app/attendance/today'))
+      },
+      providesTags: ['PunchState'],
+    }),
+    /** Optional { from, to } limits the list to that date range (Super Admin / HR / managers). */
+    getRegularizations: builder.query<RegularizationRequest[], { from?: string; to?: string } | void>({
+      async queryFn(range) {
+        return runQuery(() => apiRequest('/app/regularizations', { query: range || {} }))
       },
       providesTags: ['Regularizations'],
     }),
@@ -366,6 +383,63 @@ export const hrmsApi = createApi({
         return runQuery(() => apiRequest(`/app/regularizations/${id}`, { method: 'PATCH', body: { status } }))
       },
       invalidatesTags: ['Regularizations', 'Attendance', 'Stats'],
+    }),
+
+    // Work-from-home applications (approved days show as WFH in attendance)
+    applyWfh: builder.mutation<RemoteWorkRequest, { fromDate: string; toDate: string; reason: string }>({
+      async queryFn(body) {
+        return runQuery(() => apiRequest('/app/remote_work', { method: 'POST', body }))
+      },
+      invalidatesTags: ['RemoteWork', 'Attendance', 'PunchState'],
+    }),
+    getRemoteWork: builder.query<RemoteWorkRequest[], { from?: string; to?: string } | void>({
+      async queryFn(range) {
+        return runQuery(() => apiRequest('/app/remote_work', { query: range || {} }))
+      },
+      providesTags: ['RemoteWork'],
+    }),
+    decideRemoteWork: builder.mutation<RemoteWorkRequest, { id: string; status: 'Approved' | 'Rejected' }>({
+      async queryFn({ id, status }) {
+        return runQuery(() => apiRequest(`/app/remote_work/${id}`, { method: 'PATCH', body: { status } }))
+      },
+      invalidatesTags: ['RemoteWork', 'Attendance', 'Stats', 'PunchState'],
+    }),
+    cancelRemoteWork: builder.mutation<RemoteWorkRequest, string>({
+      async queryFn(id) {
+        return runQuery(() => apiRequest(`/app/remote_work/${id}/cancel`, { method: 'POST' }))
+      },
+      invalidatesTags: ['RemoteWork', 'Attendance', 'PunchState'],
+    }),
+
+    // Resignation
+    getResignations: builder.query<Resignation[], void>({
+      async queryFn() {
+        return runQuery(() => apiRequest('/app/resignations'))
+      },
+      providesTags: ['Resignations'],
+    }),
+    getResignationPolicy: builder.query<{ noticePeriodDays: number }, void>({
+      async queryFn() {
+        return runQuery(() => apiRequest('/app/resignations/policy'))
+      },
+    }),
+    submitResignation: builder.mutation<Resignation, { reason: string; lastWorkingDay?: string }>({
+      async queryFn(body) {
+        return runQuery(() => apiRequest('/app/resignations', { method: 'POST', body }))
+      },
+      invalidatesTags: ['Resignations'],
+    }),
+    decideResignation: builder.mutation<Resignation, { id: string; status: 'Approved' | 'Rejected'; lastWorkingDay?: string }>({
+      async queryFn({ id, ...body }) {
+        return runQuery(() => apiRequest(`/app/resignations/${id}`, { method: 'PATCH', body }))
+      },
+      invalidatesTags: ['Resignations', 'Employees', 'Stats'],
+    }),
+    withdrawResignation: builder.mutation<Resignation, string>({
+      async queryFn(id) {
+        return runQuery(() => apiRequest(`/app/resignations/${id}/withdraw`, { method: 'POST' }))
+      },
+      invalidatesTags: ['Resignations'],
     }),
 
     // ==========================================

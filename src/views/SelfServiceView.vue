@@ -24,6 +24,8 @@ import {
   MapPin,
   ChevronRight,
   Landmark,
+  DoorOpen,
+  Home,
 } from '@lucide/vue'
 import { hrmsApi } from '@/redux/api/hrmsApi'
 import { useApiQuery, useApiMutation, useAppSelector } from '@/redux/vueAdapter'
@@ -33,6 +35,10 @@ import FormInput from '@/components/forms/FormInput.vue'
 import FormSelect from '@/components/forms/FormSelect.vue'
 import FormTextarea from '@/components/forms/FormTextarea.vue'
 import AppLogo from '@/components/common/AppLogo.vue'
+import ResignationPanel from '@/components/requests/ResignationPanel.vue'
+import RemoteWorkRequests from '@/components/requests/RemoteWorkRequests.vue'
+import PunchControl from '@/components/attendance/PunchControl.vue'
+import { usePunch } from '@/composables/usePunch'
 
 const router = useRouter()
 const currentUser = useAppSelector((state) => state.auth.user)
@@ -51,11 +57,12 @@ const { data: leaveBalances } = useApiQuery<LeaveBalance[]>(hrmsApi.endpoints.ge
 const { data: leavePolicies } = useApiQuery<LeaveTypePolicy[]>(hrmsApi.endpoints.getLeavePolicies)
 const { company, formatMoney } = useMoney()
 
-const [recordAttendance, { isLoading: isPunching }] = useApiMutation(hrmsApi.endpoints.recordAttendance)
+// Clock In / Clock Out with a work location (shared control).
+const { statusLabel: punchStatus } = usePunch()
 const [applyLeave, { isLoading: isApplyingLeave }] = useApiMutation(hrmsApi.endpoints.applyLeave)
 
 // Tab & Modal State
-type EssTab = 'overview' | 'leaves' | 'payslips' | 'attendance'
+type EssTab = 'overview' | 'leaves' | 'payslips' | 'attendance' | 'wfh' | 'resignation'
 const activeTab = ref<EssTab>('overview')
 const isLeaveModalOpen = ref(false)
 const selectedPayslip = ref<Payslip | null>(null)
@@ -115,24 +122,6 @@ const myAttendanceToday = computed(() => {
 })
 
 const currentShift = computed(() => myAttendanceToday.value?.shift || myEmployeeProfile.value?.shift || '—')
-
-const handlePunch = async () => {
-  if (!hasEmployeeProfile.value) {
-    showNotification(NO_PROFILE_MESSAGE)
-    return
-  }
-  const wasCheckedIn = Boolean(myAttendanceToday.value && !myAttendanceToday.value.checkOut)
-  const { error } = await recordAttendance({
-    employeeId: currentUserId.value,
-    employeeName: currentUserName.value,
-  })
-  if (error) {
-    showNotification(error?.data || 'Could not record attendance')
-    return
-  }
-  showNotification(wasCheckedIn ? 'Checked out for the day!' : 'Clocked in successfully!')
-}
-
 
 // Leave types come from the company's leave policies.
 const leaveTypeOptions = computed(() => (leavePolicies.value || []).map((p) => ({ value: p.name, label: p.name })))
@@ -226,7 +215,7 @@ const formatCurrency = (val: number) => formatMoney(val)
         </div>
       </div>
 
-      <div class="flex items-center gap-3 self-start md:self-auto relative">
+      <div class="flex flex-col sm:flex-row sm:items-start gap-3 self-stretch md:self-auto relative">
         <button
           v-if="myEmployeeProfile"
           @click="router.push(`/employees/${myEmployeeProfile.id}`)"
@@ -236,17 +225,7 @@ const formatCurrency = (val: number) => formatMoney(val)
           <ChevronRight class="w-3.5 h-3.5" />
         </button>
 
-        <button
-          @click="handlePunch"
-          :disabled="!hasEmployeeProfile || isPunching || (myAttendanceToday && !!myAttendanceToday.checkOut)"
-          :title="hasEmployeeProfile ? '' : NO_PROFILE_MESSAGE"
-          class="px-5 py-2.5 rounded-xl bg-white text-indigo-700 hover:bg-indigo-50 font-bold text-xs shadow-md active:scale-95 transition-all disabled:opacity-50"
-        >
-          <span v-if="isPunching">Syncing...</span>
-          <span v-else-if="!myAttendanceToday">Clock In Shift</span>
-          <span v-else-if="!myAttendanceToday.checkOut">Clock Out Shift</span>
-          <span v-else>Done for Today</span>
-        </button>
+        <PunchControl button-class="bg-white text-indigo-700 hover:bg-indigo-50" @punched="showNotification" />
       </div>
     </div>
 
@@ -301,14 +280,14 @@ const formatCurrency = (val: number) => formatMoney(val)
           <CheckCircle2 class="w-4 h-4 text-purple-500" />
         </div>
         <p class="text-base font-extrabold text-slate-900 dark:text-white mt-2">
-          {{ !hasEmployeeProfile ? '—' : myAttendanceToday ? (myAttendanceToday.checkOut ? 'Completed' : 'On Shift') : 'Awaiting Punch' }}
+          {{ !hasEmployeeProfile ? '—' : punchStatus }}
         </p>
         <p class="text-[10px] text-slate-400 mt-0.5">{{ currentShift }}</p>
       </div>
     </div>
 
     <!-- Navigation Tabs -->
-    <div class="flex items-center gap-2 border-b border-slate-200 dark:border-slate-800 pb-3">
+    <div class="scroll-row items-center gap-2 border-b border-slate-200 dark:border-slate-800 pb-3">
       <button
         @click="activeTab = 'overview'"
         :class="[
@@ -359,6 +338,32 @@ const formatCurrency = (val: number) => formatMoney(val)
       >
         <Clock class="w-4 h-4" />
         <span>My Shifts ({{ myAttendance.length }})</span>
+      </button>
+
+      <button
+        @click="activeTab = 'wfh'"
+        :class="[
+          'px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 whitespace-nowrap shrink-0',
+          activeTab === 'wfh'
+            ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/30'
+            : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800'
+        ]"
+      >
+        <Home class="w-4 h-4" />
+        <span>Work From Home</span>
+      </button>
+
+      <button
+        @click="activeTab = 'resignation'"
+        :class="[
+          'px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 whitespace-nowrap',
+          activeTab === 'resignation'
+            ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/30'
+            : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800'
+        ]"
+      >
+        <DoorOpen class="w-4 h-4" />
+        <span>Resignation</span>
       </button>
     </div>
 
@@ -422,6 +427,28 @@ const formatCurrency = (val: number) => formatMoney(val)
           </button>
 
           <button
+            @click="activeTab = 'wfh'"
+            class="w-full text-left p-3.5 rounded-2xl bg-sky-50/60 dark:bg-sky-950/20 hover:bg-sky-100/60 border border-sky-100 dark:border-sky-900/40 transition-colors flex items-center justify-between"
+          >
+            <div>
+              <p class="text-xs font-bold text-slate-900 dark:text-white">Apply Work From Home</p>
+              <p class="text-[11px] text-slate-400">Shows as WFH in your attendance once approved</p>
+            </div>
+            <Home class="w-4 h-4 text-sky-500" />
+          </button>
+
+          <button
+            @click="activeTab = 'resignation'"
+            class="w-full text-left p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/40 hover:bg-slate-100 border border-slate-200/60 dark:border-slate-800 transition-colors flex items-center justify-between"
+          >
+            <div>
+              <p class="text-xs font-bold text-slate-900 dark:text-white">Resignation</p>
+              <p class="text-[11px] text-slate-400">Submit or track your resignation</p>
+            </div>
+            <DoorOpen class="w-4 h-4 text-slate-400" />
+          </button>
+
+          <button
             @click="activeTab = 'payslips'"
             class="w-full text-left p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/40 hover:bg-slate-100 border border-slate-200/60 dark:border-slate-800 transition-colors flex items-center justify-between"
           >
@@ -445,6 +472,16 @@ const formatCurrency = (val: number) => formatMoney(val)
           </button>
         </div>
       </div>
+    </div>
+
+    <!-- WORK FROM HOME -->
+    <div v-if="activeTab === 'wfh'">
+      <RemoteWorkRequests only-mine />
+    </div>
+
+    <!-- RESIGNATION -->
+    <div v-if="activeTab === 'resignation'">
+      <ResignationPanel />
     </div>
 
     <!-- TAB 2: MY LEAVES -->

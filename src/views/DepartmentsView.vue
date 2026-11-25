@@ -224,7 +224,7 @@ const totalBudget = computed(() => {
     </div>
 
     <!-- Navigation Tabs -->
-    <div class="flex items-center gap-2 border-b border-slate-200 dark:border-slate-800 pb-3">
+    <div class="scroll-row items-center gap-2 border-b border-slate-200 dark:border-slate-800 pb-3">
       <button
         @click="activeTab = 'departments'"
         :class="[

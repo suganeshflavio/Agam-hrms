@@ -11,7 +11,11 @@ import { usePermissions } from '@/composables/usePermissions'
 import { apiRequest, type ApiError } from '@/services/apiClient'
 import type { Branch, Department, Employee, Grade, Shift, ApprovalWorkflow, RolePermission } from '@/types/hrms'
 
-const emit = defineEmits<{ close: []; created: [employee: Employee] }>()
+// Without +employee+ this onboards a new employee; with it, the same steps edit
+// that employee (documents and login are managed from the profile instead).
+const props = defineProps<{ employee?: Employee }>()
+const editing = !!props.employee
+const emit = defineEmits<{ close: []; created: [employee: Employee]; saved: [employee: Employee] }>()
 const router = useRouter()
 const dispatch = useAppDispatch()
 const { isSuperAdmin } = usePermissions()
@@ -23,7 +27,9 @@ const { data: employees } = useApiQuery<Employee[]>(hrmsApi.endpoints.getEmploye
 const { data: shifts } = useApiQuery<Shift[]>(hrmsApi.endpoints.getShifts)
 const { data: workflows } = useApiQuery<ApprovalWorkflow[]>(hrmsApi.endpoints.getWorkflows)
 const { data: roles } = useApiQuery<RolePermission[]>(hrmsApi.endpoints.getRoles)
-const [addEmployee, { isLoading: isSaving }] = useApiMutation(hrmsApi.endpoints.addEmployee)
+const [addEmployee, { isLoading: isCreating }] = useApiMutation(hrmsApi.endpoints.addEmployee)
+const [updateEmployee, { isLoading: isUpdating }] = useApiMutation(hrmsApi.endpoints.updateEmployee)
+const isSaving = computed(() => isCreating.value || isUpdating.value)
 
 // ---------------------------------------------------------------- form state
 const today = new Date().toISOString().split('T')[0] as string
@@ -46,6 +52,33 @@ const form = reactive({
   // team & access
   reportingManagerId: '', teamLeadId: '', createLogin: true, loginRole: 'General Employee',
 })
+
+// Edit mode: start from the employee's current details. PAN and the bank
+// account number are only shown masked, so those inputs start empty and are
+// sent only when a new value is typed.
+if (props.employee) {
+  const e = props.employee
+  const contact = typeof e.emergencyContact === 'object' ? e.emergencyContact : { name: e.emergencyContact || '', relation: '', phone: '' }
+  const a = e.addressDetails || {}
+  Object.assign(form, {
+    firstName: e.firstName || '', middleName: e.middleName || '', lastName: e.lastName || '',
+    dateOfBirth: e.dateOfBirth || '', gender: e.gender || '', nationality: e.nationality || '', maritalStatus: e.maritalStatus || '',
+    personalEmail: e.personalEmail || '', phone: e.phone || '',
+    address: a.line || e.address || '', city: a.city || '', state: a.state || '', postalCode: a.postalCode || '', country: a.country || '',
+    emergencyName: contact?.name || '', emergencyRelation: contact?.relation || '', emergencyPhone: contact?.phone || '',
+    email: e.email || '', department: e.department || '', designation: e.designation || '', branch: e.branch || '',
+    grade: e.grade || '', employmentType: e.employmentType || 'Full-time',
+    status: ['Active', 'Probation', 'Notice Period'].includes(e.status) ? e.status : 'Active',
+    joiningDate: e.joiningDate || today, probationEndDate: e.probationEndDate || '',
+    salary: e.salary ? String(e.salary) : '', shift: e.shift || '', approvalWorkflow: e.approvalWorkflow || '',
+    bankName: e.bankDetails?.bankName || '', accountName: e.bankDetails?.accountName || '', accountNumber: '',
+    routingCode: e.bankDetails?.routingCode || '', accountType: e.bankDetails?.accountType || 'Savings',
+    panNumber: '', uanNumber: e.uanNumber || '',
+    reportingManagerId: e.reportingManagerId || '', teamLeadId: e.teamLeadId || '',
+    createLogin: false,
+  })
+}
+const keepHint = (masked?: string) => (masked ? `Leave blank to keep ${masked}` : 'Leave blank to keep the current value')
 
 interface PendingDocument { file: File; title: string; category: string }
 const documents = ref<PendingDocument[]>([])
@@ -94,15 +127,15 @@ const sections: { title: string; fields: Field[] }[][] = [
     {
       title: 'Basic details',
       fields: [
-        { key: 'firstName', label: 'First Name', required: true, placeholder: 'e.g. Bala' },
-        { key: 'middleName', label: 'Middle Name' },
-        { key: 'lastName', label: 'Last Name', required: true, placeholder: 'e.g. Murugan' },
-        { key: 'dateOfBirth', label: 'Date of Birth', type: 'date', required: true,
+        { key: 'firstName', label: 'First Name', required: true, placeholder: 'Enter your first name' },
+        { key: 'middleName', label: 'Middle Name', placeholder: 'Enter your middle name' },
+        { key: 'lastName', label: 'Last Name', required: true, placeholder: 'Enter your last name' },
+        { key: 'dateOfBirth', label: 'Date of Birth', type: 'date', required: !editing,
           validate: (v) => (v && v > minimumBirthDate ? 'Employee must be at least 16 years old' : null) },
-        { key: 'gender', label: 'Gender', type: 'select', required: true, options: () => opt(['Male', 'Female', 'Non-binary', 'Other', 'Prefer not to say']) },
+        { key: 'gender', label: 'Gender', type: 'select', required: !editing, options: () => opt(['Male', 'Female', 'Non-binary', 'Other', 'Prefer not to say']) },
         { key: 'maritalStatus', label: 'Marital Status', type: 'select', options: () => opt(['Single', 'Married', 'Divorced', 'Widowed', 'Prefer not to say']) },
         { key: 'nationality', label: 'Nationality', placeholder: 'e.g. Indian' },
-        { key: 'phone', label: 'Mobile Phone', type: 'tel', required: true, placeholder: '+91 98765 43210',
+        { key: 'phone', label: 'Mobile Phone', type: 'tel', required: !editing, placeholder: '+91 98765 43210',
           validate: (v) => (v.replace(/\D/g, '').length < 8 ? 'Enter a valid phone number' : null) },
         { key: 'personalEmail', label: 'Personal Email', type: 'email', placeholder: 'name@gmail.com', validate: emailRule },
       ],
@@ -110,11 +143,11 @@ const sections: { title: string; fields: Field[] }[][] = [
     {
       title: 'Residential address',
       fields: [
-        { key: 'address', label: 'Address Line', required: true, placeholder: 'House / street / area', wide: true },
-        { key: 'city', label: 'City', required: true },
+        { key: 'address', label: 'Address Line', required: !editing, placeholder: 'House / street / area', wide: true },
+        { key: 'city', label: 'City', required: !editing },
         { key: 'state', label: 'State / Province' },
         { key: 'postalCode', label: 'Postal Code' },
-        { key: 'country', label: 'Country', required: true, placeholder: 'e.g. India' },
+        { key: 'country', label: 'Country', required: !editing, placeholder: 'e.g. India' },
       ],
     },
     {
@@ -141,11 +174,11 @@ const sections: { title: string; fields: Field[] }[][] = [
     {
       title: 'Dates & compensation',
       fields: [
-        { key: 'status', label: 'Status', type: 'select', required: true, options: () => opt(['Active', 'Probation']) },
+        { key: 'status', label: 'Status', type: 'select', required: true, options: () => opt(editing ? ['Active', 'Probation', 'Notice Period'] : ['Active', 'Probation']) },
         { key: 'joiningDate', label: 'Joining Date', type: 'date', required: true },
         { key: 'probationEndDate', label: 'Probation End Date', type: 'date', visible: () => form.status === 'Probation',
           validate: (v) => (v && v <= form.joiningDate ? 'Must be after the joining date' : null) },
-        { key: 'salary', label: 'Annual Salary', type: 'number', required: true, placeholder: 'e.g. 600000',
+        { key: 'salary', label: 'Annual Salary', type: 'number', required: !editing, placeholder: 'e.g. 600000',
           validate: (v) => (Number(v) < 1000 ? 'Enter the annual salary (at least 1,000)' : null) },
         { key: 'shift', label: 'Work Shift', type: 'select', options: () => shiftOptions.value },
         { key: 'approvalWorkflow', label: 'Approval Workflow', type: 'select', options: () => workflowOptions.value },
@@ -156,19 +189,20 @@ const sections: { title: string; fields: Field[] }[][] = [
     {
       title: 'Salary account',
       fields: [
-        { key: 'bankName', label: 'Bank Name', required: true, placeholder: 'e.g. HDFC Bank' },
-        { key: 'accountName', label: 'Account Holder Name', required: true },
-        { key: 'accountNumber', label: 'Account Number', required: true,
+        { key: 'bankName', label: 'Bank Name', required: !editing, placeholder: 'e.g. HDFC Bank' },
+        { key: 'accountName', label: 'Account Holder Name', required: !editing },
+        { key: 'accountNumber', label: 'Account Number', required: !editing,
+          placeholder: editing ? keepHint(props.employee?.bankDetails?.accountNumber) : undefined,
           validate: (v) => (!/^\d{6,20}$/.test(v.replace(/[\s-]/g, '')) ? 'Account number must be 6–20 digits' : null) },
-        { key: 'routingCode', label: 'IFSC / Routing Code', required: true, placeholder: 'e.g. HDFC0001234',
+        { key: 'routingCode', label: 'IFSC / Routing Code', required: !editing, placeholder: 'e.g. HDFC0001234',
           validate: (v) => (!/^[A-Za-z0-9]{4,20}$/.test(v.replace(/[\s-]/g, '')) ? 'Enter a valid IFSC or routing code' : null) },
-        { key: 'accountType', label: 'Account Type', type: 'select', required: true, options: () => opt(['Savings', 'Checking', 'Current']) },
+        { key: 'accountType', label: 'Account Type', type: 'select', required: !editing, options: () => opt(['Savings', 'Checking', 'Current']) },
       ],
     },
     {
       title: 'Statutory (optional)',
       fields: [
-        { key: 'panNumber', label: 'PAN Number', placeholder: 'ABCDE1234F',
+        { key: 'panNumber', label: 'PAN Number', placeholder: editing ? keepHint(props.employee?.panNumber) : 'ABCDE1234F',
           validate: (v) => (v && !/^[A-Za-z]{5}\d{4}[A-Za-z]$/.test(v) ? 'PAN format is ABCDE1234F' : null) },
         { key: 'uanNumber', label: 'UAN (PF) Number' },
       ],
@@ -191,7 +225,7 @@ const steps = [
   { title: 'Employment', icon: Briefcase },
   { title: 'Bank', icon: Landmark },
   { title: 'Documents', icon: FileText, optional: true },
-  { title: 'Team & Login', icon: Users, optional: true },
+  { title: editing ? 'Team' : 'Team & Login', icon: Users, optional: true },
   { title: 'Review', icon: ClipboardCheck },
 ]
 const step = ref(0)
@@ -301,6 +335,8 @@ const submit = async () => {
     }
   }
 
+  if (editing) return saveChanges()
+
   const payload = {
     firstName: form.firstName.trim(), middleName: form.middleName.trim(), lastName: form.lastName.trim(),
     dateOfBirth: form.dateOfBirth, gender: form.gender, nationality: form.nationality.trim(),
@@ -353,6 +389,40 @@ const submit = async () => {
   emit('created', employee)
 }
 
+// Edit mode: sends the changed details. PAN / account number only when retyped,
+// salary and bank details only when filled in, so nothing is cleared by accident.
+const saveChanges = async () => {
+  const e = props.employee!
+  const updates: Record<string, unknown> = {
+    firstName: form.firstName.trim(), middleName: form.middleName.trim(), lastName: form.lastName.trim(),
+    dateOfBirth: form.dateOfBirth, gender: form.gender, nationality: form.nationality.trim(),
+    maritalStatus: form.maritalStatus, personalEmail: form.personalEmail.trim(), phone: form.phone.trim(),
+    address: form.address.trim(), city: form.city.trim(), state: form.state.trim(), postalCode: form.postalCode.trim(),
+    country: form.country.trim(),
+    emergencyContact: { name: form.emergencyName.trim(), relation: form.emergencyRelation.trim(), phone: form.emergencyPhone.trim() },
+    email: form.email.trim(), department: form.department, designation: form.designation.trim(), branch: form.branch,
+    grade: form.grade, employmentType: form.employmentType, status: form.status, joiningDate: form.joiningDate,
+    probationEndDate: form.status === 'Probation' ? form.probationEndDate : '',
+    shift: form.shift, approvalWorkflow: form.approvalWorkflow, uanNumber: form.uanNumber,
+    reportingManagerId: form.reportingManagerId, teamLeadId: form.teamLeadId,
+  }
+  if (String(form.salary).trim()) updates.salary = Number(form.salary)
+  if (form.panNumber.trim()) updates.panNumber = form.panNumber.trim().toUpperCase()
+  if (form.bankName.trim()) {
+    updates.bankDetails = {
+      bankName: form.bankName.trim(), accountName: form.accountName.trim(), routingCode: form.routingCode.trim(),
+      accountType: form.accountType, ...(form.accountNumber.trim() ? { accountNumber: form.accountNumber.trim() } : {}),
+    }
+  }
+  const { data, error } = await updateEmployee({ id: e.id, updates: updates as Partial<Employee> })
+  if (error || !data) {
+    submitError.value = (error as ApiError)?.data || 'The changes could not be saved'
+    return
+  }
+  emit('saved', data as Employee)
+  emit('close')
+}
+
 const viewProfile = () => {
   if (result.value) router.push(`/employees/${result.value.employee.id}`)
   emit('close')
@@ -366,6 +436,8 @@ const inputClass = (key: string) => [
 ]
 const displayValue = (field: Field) => {
   const raw = String(form[field.key] ?? '')
+  if (!raw && editing && field.key === 'accountNumber') return props.employee?.bankDetails?.accountNumber || '—'
+  if (!raw && editing && field.key === 'panNumber') return props.employee?.panNumber || '—'
   if (!raw) return '—'
   if (field.key === 'reportingManagerId' || field.key === 'teamLeadId') return nameOf(raw)
   if (field.key === 'accountNumber') return `•••• ${raw.slice(-4)}`
@@ -380,7 +452,9 @@ const displayValue = (field: Field) => {
       <!-- Header -->
       <div class="flex items-center justify-between px-6 md:px-8 pt-6 pb-4 border-b border-slate-100 dark:border-slate-800">
         <div>
-          <h2 class="text-xl font-bold text-slate-900 dark:text-white">Onboard New Employee</h2>
+          <h2 class="text-xl font-bold text-slate-900 dark:text-white">
+            {{ editing ? `Edit ${props.employee?.firstName} ${props.employee?.lastName}` : 'Onboard New Employee' }}
+          </h2>
           <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
             {{ result ? 'Employee created' : `Step ${step + 1} of ${steps.length} — ${steps[step]?.title}` }}
           </p>
@@ -477,7 +551,7 @@ const displayValue = (field: Field) => {
           </section>
 
           <!-- Login account (Team & Login step) -->
-          <section v-if="step === 4" class="p-4 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-3">
+          <section v-if="step === 4 && !editing" class="p-4 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-3">
             <label class="flex items-center gap-3 cursor-pointer">
               <input v-model="form.createLogin" type="checkbox" class="rounded border-slate-300 text-[#1989d9] focus:ring-[#1989d9]" />
               <span class="text-sm font-semibold text-slate-800 dark:text-slate-100">Create a login for this employee</span>
@@ -498,6 +572,9 @@ const displayValue = (field: Field) => {
         </div>
 
         <!-- Documents -->
+        <div v-else-if="step === 3 && editing" class="p-6 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 text-sm text-slate-500">
+          Documents are managed on the employee's profile, in the <strong>Documents</strong> tab (upload, view and verify).
+        </div>
         <div v-else-if="step === 3" class="space-y-4">
           <p class="text-sm text-slate-500">Optional — attach ID proof, contracts or certificates now, or upload them later from the profile. PDF, JPG or PNG up to 10 MB.</p>
           <div class="flex flex-wrap items-end gap-3">
@@ -545,7 +622,7 @@ const displayValue = (field: Field) => {
               </template>
             </dl>
           </section>
-          <section>
+          <section v-if="!editing">
             <div class="flex items-center justify-between mb-2">
               <h3 class="text-sm font-bold text-slate-900 dark:text-white">Documents & login</h3>
               <button class="flex items-center gap-1 text-xs font-semibold text-[#0e6db3]" @click="step = 3"><Pencil class="w-3.5 h-3.5" /> Edit</button>
@@ -591,7 +668,7 @@ const displayValue = (field: Field) => {
               class="flex items-center gap-1.5 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-md disabled:opacity-50"
               @click="submit"
             >
-              <Check class="w-4 h-4" /> {{ isSaving ? 'Saving…' : 'Create employee' }}
+              <Check class="w-4 h-4" /> {{ isSaving ? 'Saving…' : editing ? 'Save changes' : 'Create employee' }}
             </button>
           </div>
         </template>

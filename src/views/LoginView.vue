@@ -88,10 +88,10 @@ onMounted(async () => {
 
     <!-- Top Bar Controls -->
     <div class="absolute top-4 right-4 flex items-center gap-3 z-10">
-      <div class="hidden sm:flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/70 dark:bg-slate-900/70 border border-slate-200/60 dark:border-slate-800/60 backdrop-blur-md text-xs text-slate-500">
+      <!-- <div class="hidden sm:flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/70 dark:bg-slate-900/70 border border-slate-200/60 dark:border-slate-800/60 backdrop-blur-md text-xs text-slate-500">
         <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
         <span>Internal Core HRMS</span>
-      </div>
+      </div> -->
       <ThemeToggle />
     </div>
 
@@ -179,7 +179,7 @@ onMounted(async () => {
 
       <!-- Security Trust Footer -->
       <div class="text-center text-xs text-slate-400 space-y-1">
-        <p>Protected by 256-bit TLS Encryption<span v-if="zohoEnabled"> • Zoho One SSO Verified</span></p>
+        <!-- <p>Protected by 256-bit TLS Encryption<span v-if="zohoEnabled"> • Zoho One SSO Verified</span></p> -->
         <p class="text-[11px] text-slate-500">© 2026 AGAM Technologies Ltd. All rights reserved.</p>
       </div>
     </div>

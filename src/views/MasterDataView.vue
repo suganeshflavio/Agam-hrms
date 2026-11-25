@@ -90,7 +90,7 @@ const handleDelete = async (id: string, name: string) => {
     </div>
 
     <!-- Category Selector Tabs -->
-    <div class="flex flex-wrap items-center gap-2 border-b border-slate-200 dark:border-slate-800 pb-3">
+    <div class="scroll-row items-center gap-2 border-b border-slate-200 dark:border-slate-800 pb-3">
       <button
         v-for="cat in categories"
         :key="cat.id"

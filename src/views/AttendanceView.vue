@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import {
   Clock,
   Calendar,
@@ -20,10 +21,13 @@ import {
 } from '@lucide/vue'
 import { hrmsApi } from '@/redux/api/hrmsApi'
 import { useApiQuery, useApiMutation, useAppSelector } from '@/redux/vueAdapter'
-import type { AttendanceRecord, Shift, Employee, RegularizationRequest } from '@/types/hrms'
+import type { Shift, Employee, RegularizationRequest, RemoteWorkRequest } from '@/types/hrms'
 import DepartmentAttendanceRegister from '@/components/attendance/DepartmentAttendanceRegister.vue'
 import AttendanceCalendar from '@/components/attendance/AttendanceCalendar.vue'
 import RegularizationRequests from '@/components/attendance/RegularizationRequests.vue'
+import RemoteWorkRequests from '@/components/requests/RemoteWorkRequests.vue'
+import PunchControl from '@/components/attendance/PunchControl.vue'
+import { usePunch } from '@/composables/usePunch'
 import { usePermissions } from '@/composables/usePermissions'
 
 const currentUser = useAppSelector((state) => state.auth.user)
@@ -43,11 +47,11 @@ const canViewAll = computed(() => dataScope.value === 'all')
 const registerLabel = computed(() => (dataScope.value === 'all' ? 'Department Register' : 'Team Register'))
 
 // Redux Queries & Mutations
-const { data: attendance } = useApiQuery<AttendanceRecord[]>(hrmsApi.endpoints.getAttendance)
 const { data: employees } = useApiQuery<Employee[]>(hrmsApi.endpoints.getEmployees)
 const { data: shifts } = useApiQuery<Shift[]>(hrmsApi.endpoints.getShifts)
 
-const [recordAttendance, { isLoading: isPunching }] = useApiMutation(hrmsApi.endpoints.recordAttendance)
+// Clock In / Clock Out with a work location (shared control).
+const { state: punchState, statusLabel: punchStatus } = usePunch()
 const [addShift, { isLoading: isSavingShift }] = useApiMutation(hrmsApi.endpoints.addShift)
 const [updateShift] = useApiMutation(hrmsApi.endpoints.updateShift)
 const [deleteShift] = useApiMutation(hrmsApi.endpoints.deleteShift)
@@ -152,10 +156,63 @@ const handleDeleteShift = async (s: Shift) => {
 // Regularization requests: own, plus team (managers) / everyone (Super Admin, HR).
 const { data: regularizations } = useApiQuery<RegularizationRequest[]>(hrmsApi.endpoints.getRegularizations)
 const showRegularizations = computed(() => hasEmployeeProfile.value || showRegister.value)
-const regularizationsWaiting = computed(() => (regularizations.value || []).filter((r) => r.canAct && r.status === 'Pending').length)
+const { data: remoteWork } = useApiQuery<RemoteWorkRequest[]>(hrmsApi.endpoints.getRemoteWork)
+const remoteWaiting = computed(() => (remoteWork.value || []).filter((r) => r.canAct && r.status === 'Pending').length)
+// Waiting on the signed-in user: regularizations plus work-from-home sessions.
+const regularizationsWaiting = computed(
+  () => (regularizations.value || []).filter((r) => r.canAct && r.status === 'Pending').length + remoteWaiting.value,
+)
+
+// Requests & Approvals date filter (Super Admin / HR see everyone, managers their team).
+const isoDate = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+type RangePreset = 'all' | 'today' | 'week' | 'month' | 'custom'
+const rangePreset = ref<RangePreset>('all')
+const rangeFrom = ref('')
+const rangeTo = ref('')
+const setPreset = (preset: RangePreset) => {
+  rangePreset.value = preset
+  const now = new Date()
+  if (preset === 'all') {
+    rangeFrom.value = ''
+    rangeTo.value = ''
+  } else if (preset === 'today') {
+    rangeFrom.value = rangeTo.value = isoDate(now)
+  } else if (preset === 'week') {
+    const monday = new Date(now)
+    monday.setDate(now.getDate() - ((now.getDay() + 6) % 7))
+    const sunday = new Date(monday)
+    sunday.setDate(monday.getDate() + 6)
+    rangeFrom.value = isoDate(monday)
+    rangeTo.value = isoDate(sunday)
+  } else if (preset === 'month') {
+    rangeFrom.value = isoDate(new Date(now.getFullYear(), now.getMonth(), 1))
+    rangeTo.value = isoDate(new Date(now.getFullYear(), now.getMonth() + 1, 0))
+  } else if (!rangeFrom.value) {
+    rangeFrom.value = rangeTo.value = isoDate(now)
+  }
+}
+const onRangeInput = () => {
+  rangePreset.value = 'custom'
+  if (rangeTo.value && rangeFrom.value && rangeTo.value < rangeFrom.value) rangeTo.value = rangeFrom.value
+}
+const PRESETS: { id: RangePreset; label: string }[] = [
+  { id: 'all', label: 'All dates' },
+  { id: 'today', label: 'Today' },
+  { id: 'week', label: 'This week' },
+  { id: 'month', label: 'This month' },
+  { id: 'custom', label: 'Custom' },
+]
 
 // Tabs & State
-const activeTab = ref<'daily' | 'calendar' | 'regularizations' | 'shifts'>(showRegister.value ? 'daily' : 'calendar')
+// "Request regularization" from the clock-in card lands here with ?regularize=YYYY-MM-DD.
+const route = useRoute()
+const regularizeDate = computed(() => (typeof route.query.regularize === 'string' ? route.query.regularize : undefined))
+const activeTab = ref<'daily' | 'calendar' | 'regularizations' | 'shifts'>(
+  regularizeDate.value || !showRegister.value ? 'calendar' : 'daily',
+)
+watch(regularizeDate, (date) => {
+  if (date) activeTab.value = 'calendar'
+})
 watch(showRegister, (show) => {
   if (!show && activeTab.value !== 'calendar') activeTab.value = 'calendar'
 })
@@ -180,14 +237,6 @@ const showNotification = (msg: string) => {
   }, 3500)
 }
 
-const todayStr = new Date().toISOString().split('T')[0] ?? ''
-
-const myRecordToday = computed(() => {
-  return (attendance.value || []).find(
-    (a) => a.employeeId === currentUserId.value && a.date === todayStr
-  )
-})
-
 // The signed-in employee's assigned shift (from their employee record + shift templates).
 const myShift = computed(() => {
   const me = (employees.value || []).find((e) => e.id === currentUserId.value)
@@ -195,25 +244,6 @@ const myShift = computed(() => {
   if (!name) return null
   return (shifts.value || []).find((s) => s.name === name) || { name, startTime: '', endTime: '' }
 })
-
-const handleClockAction = async () => {
-  if (!hasEmployeeProfile.value) {
-    showNotification(noProfileHint)
-    return
-  }
-  const wasCheckedIn = Boolean(myRecordToday.value && !myRecordToday.value.checkOut)
-  const { error } = await recordAttendance({
-    employeeId: currentUserId.value,
-    employeeName: currentUserName.value,
-  })
-  if (error) {
-    showNotification(error?.data || 'Could not record attendance')
-    return
-  }
-  showNotification(wasCheckedIn ? 'Checked out successfully! Shift recorded.' : 'Checked in successfully! Shift started.')
-}
-
-
 </script>
 
 <template>
@@ -274,18 +304,24 @@ const handleClockAction = async () => {
               Shift Operations
             </span>
             <h2 class="text-xl font-bold mt-2">
-              {{ myRecordToday ? (myRecordToday.checkOut ? 'Shift Completed' : 'Clocked In') : 'Awaiting Check-in' }}
+              {{ punchStatus }}
             </h2>
             <p class="text-xs text-sky-100 mt-1">
               Signed in as <span class="font-semibold text-white">{{ currentUserName || '—' }}</span> ({{ currentUserRole }})
             </p>
           </div>
 
-          <div v-if="myRecordToday" class="text-right">
-            <p class="text-xs text-sky-200">Clocked In</p>
-            <p class="text-base font-bold text-emerald-400 font-mono">{{ myRecordToday.checkIn }}</p>
-            <p v-if="myRecordToday.checkOut" class="text-xs text-sky-200 mt-1">Clocked Out</p>
-            <p v-if="myRecordToday.checkOut" class="text-base font-bold text-amber-400 font-mono">{{ myRecordToday.checkOut }}</p>
+          <div v-if="punchState?.office || punchState?.wfhToday" class="text-right space-y-1 shrink-0">
+            <template v-if="punchState?.office">
+              <p class="text-xs text-sky-200">{{ punchState.office.location }}</p>
+              <p class="text-base font-bold font-mono">
+                <span class="text-emerald-400">{{ punchState.office.checkIn }}</span>
+                <span v-if="punchState.office.checkOut" class="text-amber-400"> – {{ punchState.office.checkOut }}</span>
+              </p>
+            </template>
+            <p v-if="punchState?.wfhToday" class="text-xs text-sky-100">
+              WFH today <span class="ml-1 px-1.5 py-0.5 rounded bg-white/15 text-[10px] font-bold">{{ punchState.wfhToday }}</span>
+            </p>
           </div>
         </div>
 
@@ -294,22 +330,13 @@ const handleClockAction = async () => {
             <template v-if="!hasEmployeeProfile">{{ noProfileHint }}</template>
           </p>
 
-          <button
-            @click="handleClockAction"
-            :disabled="!hasEmployeeProfile || isPunching || (myRecordToday && !!myRecordToday.checkOut)"
-            class="px-6 py-2.5 rounded-xl bg-[#1989d9] hover:bg-[#0e6db3] text-white font-bold text-xs shadow-lg shadow-[#1989d9]/30 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed self-start sm:self-auto cursor-pointer"
-          >
-            <span v-if="isPunching">Syncing...</span>
-            <span v-else-if="!myRecordToday">Clock In Now</span>
-            <span v-else-if="!myRecordToday.checkOut">Clock Out Shift</span>
-            <span v-else>Done for Today</span>
-          </button>
+          <PunchControl button-class="bg-[#1989d9] hover:bg-[#0e6db3] text-white shadow-lg shadow-[#1989d9]/30" @punched="showNotification" />
         </div>
       </div>
     </div>
 
     <!-- Navigation Tabs -->
-    <div class="flex items-center gap-2 border-b border-slate-200 dark:border-slate-800 pb-3 overflow-x-auto">
+    <div class="scroll-row items-center gap-2 border-b border-slate-200 dark:border-slate-800 pb-3">
       <button
         v-if="hasEmployeeProfile"
         @click="activeTab = 'calendar'"
@@ -349,7 +376,7 @@ const handleClockAction = async () => {
         ]"
       >
         <ClipboardCheck class="w-4 h-4" />
-        <span>Regularizations</span>
+        <span>Requests & Approvals</span>
         <span v-if="regularizationsWaiting" class="min-w-5 h-5 px-1.5 rounded-full bg-amber-400 text-white text-[10px] flex items-center justify-center">{{ regularizationsWaiting }}</span>
       </button>
 
@@ -373,11 +400,42 @@ const handleClockAction = async () => {
     <div v-if="activeTab === 'daily' && showRegister">
       <DepartmentAttendanceRegister />
     </div>
-    <div v-if="activeTab === 'regularizations' && showRegularizations">
-      <RegularizationRequests />
+    <div v-if="activeTab === 'regularizations' && showRegularizations" class="space-y-6">
+      <!-- Date filter: Super Admin / HR (everyone) and managers (their team) -->
+      <div
+        v-if="showRegister"
+        class="p-3 sm:p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 flex flex-col lg:flex-row lg:items-end gap-3"
+      >
+        <div class="min-w-0">
+          <p class="text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-1.5">Show requests for</p>
+          <div class="scroll-row gap-1 p-1 rounded-xl bg-slate-100 dark:bg-slate-800 max-w-full">
+            <button
+              v-for="p in PRESETS" :key="p.id" type="button"
+              class="px-3 py-1.5 rounded-lg text-xs font-bold cursor-pointer transition-colors"
+              :class="rangePreset === p.id ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs' : 'text-slate-500'"
+              @click="setPreset(p.id)"
+            >
+              {{ p.label }}
+            </button>
+          </div>
+        </div>
+        <div v-if="rangePreset !== 'all'" class="grid grid-cols-2 gap-2 lg:w-80">
+          <label class="text-[11px] font-semibold text-slate-500">
+            From
+            <input v-model="rangeFrom" type="date" class="mt-1 w-full px-2.5 py-2 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs" @change="onRangeInput" />
+          </label>
+          <label class="text-[11px] font-semibold text-slate-500">
+            To
+            <input v-model="rangeTo" type="date" :min="rangeFrom" class="mt-1 w-full px-2.5 py-2 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs" @change="onRangeInput" />
+          </label>
+        </div>
+      </div>
+
+      <RemoteWorkRequests :from="rangeFrom || undefined" :to="rangeTo || undefined" />
+      <RegularizationRequests :from="rangeFrom || undefined" :to="rangeTo || undefined" />
     </div>
     <div v-if="activeTab === 'calendar'">
-      <AttendanceCalendar v-if="hasEmployeeProfile" />
+      <AttendanceCalendar v-if="hasEmployeeProfile" :regularize-date="regularizeDate" />
       <div v-else class="p-10 rounded-3xl border border-dashed border-slate-300 dark:border-slate-700 text-center text-sm text-slate-500">
         {{ noProfileHint }}
       </div>
