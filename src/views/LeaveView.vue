@@ -757,7 +757,7 @@ const handleDeleteHoliday = async (h: Holiday) => {
         <div class="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-800">
           <div>
             <h2 class="text-lg font-bold text-slate-900 dark:text-white">Apply for Time Off</h2>
-            <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Submit request verified by Zod schema</p>
+            <!-- <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Submit request verified by Zod schema</p> -->
           </div>
           <button
             @click="isModalOpen = false"
@@ -767,7 +767,7 @@ const handleDeleteHoliday = async (h: Holiday) => {
           </button>
         </div>
 
-        <form @submit="onSubmit" class="space-y-4 mt-6">
+        <form @submit="onSubmit" class="space-y-4 mt-4">
           <FormSelect
             v-if="canApplyForOthers"
             name="employeeId"
