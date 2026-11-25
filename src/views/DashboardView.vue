@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 import { RouterLink } from 'vue-router'
 import {
   Users,
@@ -14,6 +14,8 @@ import {
   Fingerprint,
 } from '@lucide/vue'
 import { hrmsApi } from '@/redux/api/hrmsApi'
+import PunchControl from '@/components/attendance/PunchControl.vue'
+import { usePunch } from '@/composables/usePunch'
 import { useApiQuery, useApiMutation } from '@/redux/vueAdapter'
 import { usePermissions } from '@/composables/usePermissions'
 import type { HRMSStats, LeaveRequest, AttendanceRecord, Employee } from '@/types/hrms'
@@ -24,8 +26,6 @@ const { user: authUser, can, hasEmployeeProfile } = usePermissions()
 const canViewOrganization = computed(() => authUser.value?.dataScope === 'all')
 const canViewAllAttendance = computed(() => can('attendance', 'view'))
 const canViewAllLeaves = computed(() => can('leaves', 'view'))
-// Logins without an employee profile cannot punch attendance.
-const currentUserId = computed(() => authUser.value?.employeeId || '')
 const currentUserName = computed(() => authUser.value?.name || '')
 
 // Fetch stats, leaves, attendance, and employees via Redux Toolkit API
@@ -38,9 +38,8 @@ const [updateLeaveStatus, { isLoading: updatingStatus }] = useApiMutation(
   hrmsApi.endpoints.updateLeaveStatus
 )
 
-const [recordAttendance, { isLoading: punchingAttendance }] = useApiMutation(
-  hrmsApi.endpoints.recordAttendance
-)
+// Clock In / Clock Out with a work location (shared control).
+const { statusLabel: punchStatus } = usePunch()
 
 // The backend already limits the employee list to the user's scope (own, or own + team).
 const teamIds = computed(() => new Set((employees.value || []).map((e) => e.id)))
@@ -77,28 +76,11 @@ const top5Leaves = computed(() => {
     .slice(0, 5)
 })
 
-const today = new Date().toISOString().split('T')[0]
-const userAttendanceToday = computed(() => {
-  return (attendance.value || []).find(
-    (a) => a.employeeId === currentUserId.value && a.date === today
-  )
-})
-
-const punchError = ref('')
-const handlePunch = async () => {
-  punchError.value = ''
-  if (!hasEmployeeProfile.value) {
-    punchError.value = "Your login isn't linked to an employee profile. Add yourself as an employee with your login email."
-    return
-  }
-  const { error } = await recordAttendance({
-    employeeId: currentUserId.value,
-    employeeName: currentUserName.value,
-  })
-  if (error) {
-    punchError.value = error?.data || 'Could not record attendance'
-    setTimeout(() => (punchError.value = ''), 6000)
-  }
+// "24 Nov – 25 Nov 2026", or a single day.
+const leaveRange = (start: string, end: string) => {
+  const fmt = (iso: string, withYear: boolean) =>
+    new Date(`${iso}T00:00:00`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', ...(withYear ? { year: 'numeric' } : {}) })
+  return start === end || !end ? fmt(start, true) : `${fmt(start, false)} – ${fmt(end, true)}`
 }
 
 const handleApprove = async (id: string) => {
@@ -113,7 +95,7 @@ const handleReject = async (id: string) => {
 <template>
   <div class="space-y-8 max-w-7xl mx-auto">
     <!-- Welcome Header & Quick Punch (AGAM Technologies Brand Palette) -->
-    <div class="relative overflow-hidden flex flex-col md:flex-row md:items-center justify-between gap-4 p-6 rounded-3xl bg-gradient-to-r from-[#044663] via-[#095f87] to-[#1989d9] text-white shadow-xl shadow-[#044663]/20">
+    <div class="relative overflow-hidden flex flex-col xl:flex-row xl:items-center justify-between gap-5 p-6 rounded-3xl bg-gradient-to-r from-[#044663] via-[#095f87] to-[#1989d9] text-white shadow-xl shadow-[#044663]/20">
       <!-- Subtle Decorative Logo Backdrop / Watermark -->
       <div class="absolute -right-8 -bottom-10 opacity-10 pointer-events-none w-72 h-72">
         <svg viewBox="20 20 570 510" class="w-full h-full fill-white">
@@ -121,7 +103,7 @@ const handleReject = async (id: string) => {
         </svg>
       </div>
 
-      <div class="relative z-10">
+      <div class="relative z-10 min-w-0">
         <div class="inline-flex items-center gap-2 px-2.5 py-0.5 rounded-full bg-white/15 backdrop-blur-xs text-[11px] font-semibold text-sky-100 mb-2 border border-white/20">
           <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
           <span>{{ canViewOrganization ? 'Full Organization View' : 'My Team Hub' }}</span>
@@ -134,36 +116,26 @@ const handleReject = async (id: string) => {
         </p>
       </div>
 
-      <!-- Quick Attendance Punch Clock -->
-      <div class="relative z-10 flex items-center gap-3 bg-white/10 backdrop-blur-md p-2.5 rounded-2xl border border-white/20 self-start md:self-auto shadow-inner">
-        <div class="text-right px-2">
+      <!-- Quick Attendance Punch Clock (only logins linked to an employee profile can clock in) -->
+      <div v-if="hasEmployeeProfile" class="relative z-10 flex flex-col gap-3 bg-white/10 backdrop-blur-md p-4 rounded-2xl border border-white/20 shadow-inner w-full xl:w-auto xl:max-w-md shrink-0">
+        <div>
           <p class="text-[11px] font-medium text-sky-100 uppercase tracking-wider">Attendance Status</p>
           <p class="text-sm font-bold">
-            {{ userAttendanceToday ? (userAttendanceToday.checkOut ? 'Shift Completed' : 'Punched In') : 'Not Checked In' }}
+            {{ punchStatus }}
           </p>
         </div>
-        <button
-          @click="handlePunch"
-          :disabled="!hasEmployeeProfile || punchingAttendance || (userAttendanceToday && !!userAttendanceToday.checkOut)"
-          :title="hasEmployeeProfile ? '' : 'Your login isn\'t linked to an employee profile. Add yourself as an employee with your login email.'"
-          class="px-4 py-2 rounded-xl bg-white text-[#044663] font-bold text-xs shadow-md hover:bg-sky-50 active:scale-95 transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-        >
-          <span v-if="punchingAttendance">Syncing...</span>
-          <span v-else-if="!userAttendanceToday">Clock In</span>
-          <span v-else-if="!userAttendanceToday.checkOut">Clock Out</span>
-          <span v-else>Completed</span>
-        </button>
+        <PunchControl align="start" button-class="bg-white text-[#044663] hover:bg-sky-50" />
       </div>
     </div>
 
     <!-- Stat Cards Grid -->
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-      <div class="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xs flex items-center gap-4">
-        <div class="w-12 h-12 rounded-xl bg-[#1989d9]/10 dark:bg-[#1989d9]/20 text-[#1989d9] dark:text-[#38a5e4] flex items-center justify-center shrink-0">
+    <div class="grid grid-cols-2 xl:grid-cols-4 gap-3 sm:gap-4">
+      <div class="p-4 sm:p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xs flex flex-col sm:flex-row items-start sm:items-center gap-3 sm:gap-4 min-w-0">
+        <div class="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-[#1989d9]/10 dark:bg-[#1989d9]/20 text-[#1989d9] dark:text-[#38a5e4] flex items-center justify-center shrink-0">
           <Users class="w-6 h-6" />
         </div>
         <div>
-          <p class="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+          <p class="text-[11px] sm:text-xs font-medium leading-tight text-slate-500 dark:text-slate-400 uppercase tracking-wider">
             {{ canViewOrganization ? 'Total Headcount' : 'Team Members' }}
           </p>
           <p class="text-2xl font-bold text-slate-900 dark:text-white mt-0.5">
@@ -176,12 +148,12 @@ const handleReject = async (id: string) => {
         </div>
       </div>
 
-      <div class="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xs flex items-center gap-4">
-        <div class="w-12 h-12 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
+      <div class="p-4 sm:p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xs flex flex-col sm:flex-row items-start sm:items-center gap-3 sm:gap-4 min-w-0">
+        <div class="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
           <UserCheck class="w-6 h-6" />
         </div>
         <div>
-          <p class="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Present Today</p>
+          <p class="text-[11px] sm:text-xs font-medium leading-tight text-slate-500 dark:text-slate-400 uppercase tracking-wider">Present Today</p>
           <p class="text-2xl font-bold text-slate-900 dark:text-white mt-0.5">
             {{ stats?.presentToday ?? '...' }}
           </p>
@@ -189,12 +161,12 @@ const handleReject = async (id: string) => {
         </div>
       </div>
 
-      <div class="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xs flex items-center gap-4">
-        <div class="w-12 h-12 rounded-xl bg-sky-50 dark:bg-sky-950/60 text-[#0e6db3] dark:text-[#38a5e4] flex items-center justify-center shrink-0">
+      <div class="p-4 sm:p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xs flex flex-col sm:flex-row items-start sm:items-center gap-3 sm:gap-4 min-w-0">
+        <div class="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-sky-50 dark:bg-sky-950/60 text-[#0e6db3] dark:text-[#38a5e4] flex items-center justify-center shrink-0">
           <CalendarDays class="w-6 h-6" />
         </div>
         <div>
-          <p class="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">On Leave</p>
+          <p class="text-[11px] sm:text-xs font-medium leading-tight text-slate-500 dark:text-slate-400 uppercase tracking-wider">On Leave</p>
           <p class="text-2xl font-bold text-slate-900 dark:text-white mt-0.5">
             {{ stats?.onLeaveToday ?? '...' }}
           </p>
@@ -202,12 +174,12 @@ const handleReject = async (id: string) => {
         </div>
       </div>
 
-      <div class="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xs flex items-center gap-4">
-        <div class="w-12 h-12 rounded-xl bg-rose-50 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400 flex items-center justify-center shrink-0">
+      <div class="p-4 sm:p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xs flex flex-col sm:flex-row items-start sm:items-center gap-3 sm:gap-4 min-w-0">
+        <div class="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-rose-50 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400 flex items-center justify-center shrink-0">
           <Clock class="w-6 h-6" />
         </div>
         <div>
-          <p class="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Pending Leaves</p>
+          <p class="text-[11px] sm:text-xs font-medium leading-tight text-slate-500 dark:text-slate-400 uppercase tracking-wider">Pending Leaves</p>
           <p class="text-2xl font-bold text-slate-900 dark:text-white mt-0.5">
             {{ stats?.pendingLeaveRequests ?? '...' }}
           </p>
@@ -219,17 +191,17 @@ const handleReject = async (id: string) => {
     <!-- Main Dashboard Panels: Daily Attendance Register & Leave Management Top 5 -->
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
       <!-- 1. Daily Attendance Register Panel -->
-      <div class="rounded-3xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 p-6 shadow-xs flex flex-col justify-between">
+      <div class="rounded-3xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 p-4 sm:p-6 shadow-xs flex flex-col justify-between min-w-0">
         <div>
-          <div class="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-800">
-            <div class="flex items-center gap-3">
-              <div class="w-10 h-10 rounded-2xl bg-[#044663]/10 dark:bg-[#1989d9]/20 text-[#044663] dark:text-[#38a5e4] flex items-center justify-center">
+          <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 pb-4 border-b border-slate-100 dark:border-slate-800">
+            <div class="flex items-center gap-3 min-w-0 flex-1">
+              <div class="w-10 h-10 shrink-0 rounded-2xl bg-[#044663]/10 dark:bg-[#1989d9]/20 text-[#044663] dark:text-[#38a5e4] flex items-center justify-center">
                 <Clock class="w-5 h-5" />
               </div>
-              <div>
-                <div class="flex items-center gap-2">
+              <div class="min-w-0">
+                <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
                   <h2 class="text-base font-bold text-slate-900 dark:text-white">Daily Attendance Register</h2>
-                  <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#1989d9]/10 text-[#0e6db3] dark:text-[#38a5e4]">
+                  <span class="px-2 py-0.5 rounded-full text-[10px] font-bold whitespace-nowrap bg-[#1989d9]/10 text-[#0e6db3] dark:text-[#38a5e4]">
                     Top 5
                   </span>
                 </div>
@@ -241,7 +213,7 @@ const handleReject = async (id: string) => {
 
             <RouterLink
               to="/attendance"
-              class="inline-flex items-center gap-1.5 text-xs font-semibold text-[#1989d9] dark:text-[#38a5e4] hover:underline"
+              class="inline-flex items-center gap-1.5 shrink-0 whitespace-nowrap text-xs font-semibold text-[#1989d9] dark:text-[#38a5e4] hover:underline"
             >
               <span>Full Register</span>
               <ArrowRight class="w-3.5 h-3.5" />
@@ -264,15 +236,15 @@ const handleReject = async (id: string) => {
             <div
               v-for="record in dailyAttendanceRegister"
               :key="record.id"
-              class="py-3 flex items-center justify-between gap-3 group hover:bg-slate-50/50 dark:hover:bg-slate-800/30 px-2 rounded-xl transition-colors"
+              class="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-3 group hover:bg-slate-50/50 dark:hover:bg-slate-800/30 px-2 rounded-xl transition-colors"
             >
-              <div class="flex items-center gap-3 min-w-0">
+              <div class="flex items-start sm:items-center gap-3 min-w-0">
                 <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-[#044663] to-[#1989d9] text-white flex items-center justify-center font-bold text-xs shrink-0 shadow-2xs">
                   {{ record.employeeName.split(' ').map(n => n[0]).join('') }}
                 </div>
                 <div class="min-w-0">
-                  <div class="flex items-center gap-2">
-                    <p class="text-xs font-bold text-slate-900 dark:text-white truncate">{{ record.employeeName }}</p>
+                  <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <p class="text-xs font-bold text-slate-900 dark:text-white truncate max-w-[12rem]">{{ record.employeeName }}</p>
                     <span
                       :class="[
                         'px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider',
@@ -288,21 +260,21 @@ const handleReject = async (id: string) => {
                       {{ record.status }}
                     </span>
                   </div>
-                  <div class="flex items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-                    <span>{{ record.shift }}</span>
-                    <span>•</span>
-                    <span class="font-mono text-slate-600 dark:text-slate-300">In: {{ record.checkIn }}</span>
-                    <span v-if="record.checkOut" class="font-mono text-slate-600 dark:text-slate-300">| Out: {{ record.checkOut }}</span>
+                  <div class="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                    <span class="whitespace-nowrap">{{ record.shift }}</span>
+                    <span class="hidden sm:inline">•</span>
+                    <span class="font-mono whitespace-nowrap text-slate-600 dark:text-slate-300">In {{ record.checkIn }}</span>
+                    <span v-if="record.checkOut" class="font-mono whitespace-nowrap text-slate-600 dark:text-slate-300">Out {{ record.checkOut }}</span>
                   </div>
                 </div>
               </div>
 
-              <div class="text-right shrink-0">
-                <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-[10px] font-semibold text-slate-600 dark:text-slate-300 border border-slate-200/50 dark:border-slate-700">
+              <div class="flex sm:flex-col items-center sm:items-end gap-2 sm:gap-0 pl-12 sm:pl-0 shrink-0">
+                <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md whitespace-nowrap bg-slate-100 dark:bg-slate-800 text-[10px] font-semibold text-slate-600 dark:text-slate-300 border border-slate-200/50 dark:border-slate-700">
                   <Fingerprint class="w-3 h-3 text-[#1989d9]" />
                   <span>{{ record.source }}</span>
                 </span>
-                <p v-if="record.workHours" class="text-[10px] text-slate-400 mt-1 font-mono">
+                <p v-if="record.workHours" class="text-[10px] text-slate-400 sm:mt-1 font-mono whitespace-nowrap">
                   {{ record.workHours }}h total
                 </p>
               </div>
@@ -322,17 +294,17 @@ const handleReject = async (id: string) => {
       </div>
 
       <!-- 2. Leave Management (Top 5) Panel -->
-      <div class="rounded-3xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 p-6 shadow-xs flex flex-col justify-between">
+      <div class="rounded-3xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 p-4 sm:p-6 shadow-xs flex flex-col justify-between min-w-0">
         <div>
-          <div class="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-800">
-            <div class="flex items-center gap-3">
-              <div class="w-10 h-10 rounded-2xl bg-[#1989d9]/10 dark:bg-[#1989d9]/20 text-[#0e6db3] dark:text-[#38a5e4] flex items-center justify-center">
+          <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 pb-4 border-b border-slate-100 dark:border-slate-800">
+            <div class="flex items-center gap-3 min-w-0 flex-1">
+              <div class="w-10 h-10 shrink-0 rounded-2xl bg-[#1989d9]/10 dark:bg-[#1989d9]/20 text-[#0e6db3] dark:text-[#38a5e4] flex items-center justify-center">
                 <CalendarCheck class="w-5 h-5" />
               </div>
-              <div>
-                <div class="flex items-center gap-2">
+              <div class="min-w-0">
+                <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
                   <h2 class="text-base font-bold text-slate-900 dark:text-white">Leave Management</h2>
-                  <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#1989d9]/10 text-[#0e6db3] dark:text-[#38a5e4] border border-[#1989d9]/20">
+                  <span class="px-2 py-0.5 rounded-full text-[10px] font-bold whitespace-nowrap bg-[#1989d9]/10 text-[#0e6db3] dark:text-[#38a5e4] border border-[#1989d9]/20">
                     Top 5
                   </span>
                 </div>
@@ -344,7 +316,7 @@ const handleReject = async (id: string) => {
 
             <RouterLink
               to="/leaves"
-              class="inline-flex items-center gap-1.5 text-xs font-semibold text-[#1989d9] dark:text-[#38a5e4] hover:underline"
+              class="inline-flex items-center gap-1.5 shrink-0 whitespace-nowrap text-xs font-semibold text-[#1989d9] dark:text-[#38a5e4] hover:underline"
             >
               <span>Manage Leaves</span>
               <ArrowRight class="w-3.5 h-3.5" />
@@ -367,15 +339,15 @@ const handleReject = async (id: string) => {
             <div
               v-for="req in top5Leaves"
               :key="req.id"
-              class="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 group hover:bg-slate-50/50 dark:hover:bg-slate-800/30 px-2 rounded-xl transition-colors"
+              class="py-3 flex flex-col 2xl:flex-row 2xl:items-center justify-between gap-2 2xl:gap-3 group hover:bg-slate-50/50 dark:hover:bg-slate-800/30 px-2 rounded-xl transition-colors"
             >
-              <div class="flex items-start gap-3 min-w-0">
+              <div class="flex items-start gap-3 min-w-0 flex-1">
                 <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-[#044663] to-[#1989d9] text-white flex items-center justify-center font-bold text-xs shrink-0 shadow-2xs mt-0.5 sm:mt-0">
                   {{ req.employeeName.split(' ').map(n => n[0]).join('') }}
                 </div>
-                <div class="min-w-0 space-y-0.5">
+                <div class="min-w-0 flex-1 space-y-1">
                   <div class="flex flex-wrap items-center gap-1.5">
-                    <span class="font-bold text-xs text-slate-900 dark:text-white">{{ req.employeeName }}</span>
+                    <span class="font-bold text-xs text-slate-900 dark:text-white mr-0.5">{{ req.employeeName }}</span>
                     <span class="text-[10px] px-1.5 py-0.5 rounded font-medium bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
                       {{ req.department }}
                     </span>
@@ -395,16 +367,17 @@ const handleReject = async (id: string) => {
                       {{ req.status }}
                     </span>
                   </div>
-                  <p class="text-[11px] text-slate-500 dark:text-slate-400">
-                    {{ req.startDate }} to {{ req.endDate }} ({{ req.daysCount }} {{ req.daysCount === 1 ? 'day' : 'days' }}) • "{{ req.reason }}"
+                  <p class="text-[11px] font-semibold text-slate-600 dark:text-slate-300">
+                    {{ leaveRange(req.startDate, req.endDate) }} · {{ req.daysCount }} {{ req.daysCount === 1 ? 'day' : 'days' }}
                   </p>
+                  <p v-if="req.reason" class="text-[11px] text-slate-500 dark:text-slate-400 line-clamp-2 break-words">“{{ req.reason }}”</p>
                 </div>
               </div>
 
               <!-- Quick Approval Actions: only when the signed-in user can act on this request -->
               <div
                 v-if="req.status === 'Pending' && req.canAct"
-                class="flex items-center gap-1.5 shrink-0 self-end sm:self-center"
+                class="flex items-center gap-1.5 shrink-0 self-end 2xl:self-center"
               >
                 <button
                   @click="handleApprove(req.id)"
@@ -437,10 +410,6 @@ const handleReject = async (id: string) => {
           </RouterLink>
         </div>
       </div>
-    </div>
-    <!-- Clock-in errors from the server -->
-    <div v-if="punchError" class="fixed bottom-6 right-6 z-50 max-w-md px-4 py-3 rounded-xl bg-rose-600 text-white text-sm shadow-lg" role="alert">
-      {{ punchError }}
     </div>
   </div>
 </template>

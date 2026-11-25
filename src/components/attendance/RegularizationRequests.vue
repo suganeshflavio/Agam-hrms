@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { ArrowRight, CheckCircle2, ClipboardCheck, Inbox, XCircle } from '@lucide/vue'
 import { hrmsApi } from '@/redux/api/hrmsApi'
 import { useApiMutation, useApiQuery } from '@/redux/vueAdapter'
@@ -11,11 +11,17 @@ import { formatDay } from './time'
 // Attendance regularization requests the user can see: their own, plus their
 // team's (managers) or everyone's (Super Admin / HR). Approve/Reject appears
 // only for the person the request is currently waiting on.
+const props = withDefaults(defineProps<{ from?: string; to?: string }>(), { from: undefined, to: undefined })
 const { user } = usePermissions()
-const { data: requests, isLoading, error } = useApiQuery<RegularizationRequest[]>(hrmsApi.endpoints.getRegularizations)
+// With a date range (Requests & Approvals date filter) every status in that range is listed.
+const { data: requests, isLoading, error } = useApiQuery<RegularizationRequest[]>(
+  hrmsApi.endpoints.getRegularizations,
+  () => (props.from ? { from: props.from, to: props.to || props.from } : undefined),
+)
 const [decide] = useApiMutation(hrmsApi.endpoints.updateRegularizationStatus)
 
-const filter = ref<'Pending' | 'All'>('Pending')
+const filter = ref<'Pending' | 'All'>(props.from ? 'All' : 'Pending')
+watch(() => props.from, (from) => (filter.value = from ? 'All' : filter.value))
 const myId = computed(() => user.value?.employeeId || '')
 const scope = computed(() => user.value?.dataScope || 'own')
 const title = computed(() => (scope.value === 'own' ? 'My Regularization Requests' : 'Regularization Requests'))
@@ -58,7 +64,7 @@ const STATUS: Record<RegularizationRequest['status'], string> = {
           </p>
         </div>
       </div>
-      <div class="flex rounded-xl bg-slate-100 dark:bg-slate-800 p-1 self-start sm:self-auto">
+      <div class="flex rounded-xl bg-slate-100 dark:bg-slate-800 p-1 self-start sm:self-auto shrink-0">
         <button
           v-for="f in (['Pending', 'All'] as const)" :key="f"
           class="px-3 py-1.5 rounded-lg text-xs font-bold cursor-pointer transition-colors"

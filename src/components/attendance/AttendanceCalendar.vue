@@ -13,6 +13,7 @@ import {
   XCircle,
   FilePenLine,
   Hourglass,
+  Home,
 } from '@lucide/vue'
 import { hrmsApi } from '@/redux/api/hrmsApi'
 import { useApiMutation, useApiQuery } from '@/redux/vueAdapter'
@@ -23,7 +24,10 @@ import { STATUS_BADGE, STATUS_LABELS } from './statusStyles'
 import { to24h } from './time'
 
 // A month of attendance: green = attendance marked, red = missed.
-const props = withDefaults(defineProps<{ employeeId?: string; title?: string }>(), { employeeId: undefined, title: 'My Attendance' })
+const props = withDefaults(
+  defineProps<{ employeeId?: string; title?: string; regularizeDate?: string }>(),
+  { employeeId: undefined, title: 'My Attendance', regularizeDate: undefined },
+)
 
 type Day = AttendanceCalendar['days'][number]
 
@@ -76,8 +80,9 @@ const CELL: Record<AttendanceDayStatus, string> = {
   late: 'bg-emerald-500 text-white border-emerald-500 shadow-sm shadow-emerald-500/30',
   half_day: 'bg-emerald-500 text-white border-emerald-500 shadow-sm shadow-emerald-500/30',
   absent: 'bg-rose-500 text-white border-rose-500 shadow-sm shadow-rose-500/30',
+  wfh: 'bg-sky-500 text-white border-sky-500 shadow-sm shadow-sky-500/30',
   on_leave: 'bg-violet-50 text-violet-700 border-violet-200 dark:bg-violet-950/40 dark:text-violet-300 dark:border-violet-900',
-  holiday: 'bg-sky-50 text-sky-700 border-sky-200 dark:bg-sky-950/40 dark:text-sky-300 dark:border-sky-900',
+  holiday: 'bg-cyan-50 text-cyan-700 border-cyan-200 dark:bg-cyan-950/40 dark:text-cyan-300 dark:border-cyan-900',
   weekly_off: 'bg-slate-50 text-slate-400 border-slate-200 dark:bg-slate-800/60 dark:text-slate-500 dark:border-slate-700',
   not_marked: 'bg-amber-50 text-amber-800 border-amber-400 border-dashed dark:bg-amber-950/30 dark:text-amber-300',
   upcoming: 'bg-white text-slate-400 border-slate-200 dark:bg-slate-900 dark:text-slate-500 dark:border-slate-800',
@@ -87,6 +92,7 @@ const SHORT: Partial<Record<AttendanceDayStatus, string>> = {
   late: 'Late',
   half_day: 'Half day',
   absent: 'Absent',
+  wfh: 'WFH',
   on_leave: 'Leave',
   holiday: 'Holiday',
   weekly_off: 'Off',
@@ -97,18 +103,21 @@ const summary = computed(() => {
   const s = calendar.value?.summary || {}
   const marked = (s.present || 0) + (s.late || 0) + (s.half_day || 0)
   const missed = s.absent || 0
-  const worked = marked + missed
+  const wfh = s.wfh || 0
+  const worked = marked + wfh + missed
   return {
     marked,
     missed,
+    wfh,
     late: s.late || 0,
     leave: s.on_leave || 0,
-    rate: worked ? Math.round((marked / worked) * 100) : null,
+    rate: worked ? Math.round(((marked + wfh) / worked) * 100) : null,
   }
 })
 
 const stats = computed(() => [
   { label: 'Days present', value: summary.value.marked, icon: CheckCircle2, cls: 'text-emerald-600 bg-emerald-50 dark:bg-emerald-950/50 dark:text-emerald-400' },
+  { label: 'Work from home', value: summary.value.wfh, icon: Home, cls: 'text-sky-600 bg-sky-50 dark:bg-sky-950/50 dark:text-sky-300' },
   { label: 'Days missed', value: summary.value.missed, icon: XCircle, cls: 'text-rose-600 bg-rose-50 dark:bg-rose-950/50 dark:text-rose-400' },
   { label: 'Late arrivals', value: summary.value.late, icon: Timer, cls: 'text-amber-600 bg-amber-50 dark:bg-amber-950/50 dark:text-amber-400' },
   { label: 'On leave', value: summary.value.leave, icon: Plane, cls: 'text-violet-600 bg-violet-50 dark:bg-violet-950/50 dark:text-violet-300' },
@@ -116,12 +125,14 @@ const stats = computed(() => [
 
 const legend = [
   { label: 'Marked', cls: 'bg-emerald-500' },
+  { label: 'Work from home', cls: 'bg-sky-500' },
   { label: 'Missed', cls: 'bg-rose-500' },
   { label: 'Today, not marked', cls: 'bg-amber-50 border border-dashed border-amber-400' },
   { label: 'Leave', cls: 'bg-violet-200 dark:bg-violet-800' },
-  { label: 'Holiday', cls: 'bg-sky-200 dark:bg-sky-800' },
+  { label: 'Holiday', cls: 'bg-cyan-100 dark:bg-cyan-900' },
   { label: 'Weekly off', cls: 'bg-slate-200 dark:bg-slate-700' },
   { label: 'Regularization pending', cls: 'bg-amber-400 rounded-full' },
+  { label: 'WFH pending approval', cls: 'bg-sky-400 rounded-full' },
 ]
 
 const weekdays = [
@@ -173,6 +184,20 @@ watch(selectedDate, () => {
   showForm.value = false
   formDone.value = ''
 })
+
+// Opened from "Request regularization" (after clocking out): select the day and open the form.
+watch(
+  () => [props.regularizeDate, selectedDay.value?.date] as const,
+  ([date]) => {
+    if (!date || showForm.value) return
+    if (selectedDate.value !== date) {
+      selectedDate.value = date
+      return
+    }
+    if (canRequest.value) openForm()
+  },
+  { immediate: true },
+)
 const submitForm = async () => {
   const day = selectedDay.value
   if (!day) return
@@ -249,7 +274,7 @@ const tooltip = (d: Day) =>
 
     <div v-else class="p-4 sm:p-6 space-y-5">
       <!-- Month summary -->
-      <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
         <div
           v-for="s in stats" :key="s.label"
           class="p-3 sm:p-4 rounded-2xl border border-slate-100 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/30 flex items-center gap-3"
@@ -317,6 +342,11 @@ const tooltip = (d: Day) =>
                   class="absolute top-1 right-1 w-2 h-2 rounded-full bg-amber-400 ring-2 ring-white dark:ring-slate-900"
                   title="Regularization pending"
                 ></span>
+                <span
+                  v-if="cell.wfhPending"
+                  class="absolute top-1 left-1 w-2 h-2 rounded-full bg-sky-400 ring-2 ring-white dark:ring-slate-900"
+                  title="Work from home pending approval"
+                ></span>
 
                 <!-- Mobile: a small dot for late/half day -->
                 <span v-if="cell.status === 'late' || cell.status === 'half_day'" class="sm:hidden mt-0.5 w-1 h-1 rounded-full bg-white"></span>
@@ -324,7 +354,7 @@ const tooltip = (d: Day) =>
                 <!-- Larger screens: times or a short label -->
                 <div class="hidden sm:block w-full text-[10px] leading-tight font-semibold">
                   <template v-if="isMarked(cell.status)">
-                    <span class="block font-mono opacity-95">{{ cell.checkIn }}<template v-if="cell.checkOut"> – {{ cell.checkOut }}</template></span>
+                    <span v-if="cell.checkIn" class="block font-mono opacity-95">{{ cell.checkIn }}<template v-if="cell.checkOut"> – {{ cell.checkOut }}</template></span>
                     <span v-if="SHORT[cell.status]" class="block opacity-80">{{ SHORT[cell.status] }}</span>
                   </template>
                   <span v-else-if="SHORT[cell.status]" class="block truncate opacity-90">{{ cell.leaveType || SHORT[cell.status] }}</span>
@@ -348,6 +378,15 @@ const tooltip = (d: Day) =>
             <span class="inline-block mt-2 px-2.5 py-1 rounded-lg text-[11px] font-bold" :class="STATUS_BADGE[selectedDay.status]">
               {{ STATUS_LABELS[selectedDay.status] }}<template v-if="selectedDay.leaveType"> · {{ selectedDay.leaveType }}</template>
             </span>
+            <span v-if="selectedDay.location" class="inline-block mt-2 ml-1 px-2.5 py-1 rounded-lg text-[11px] font-bold bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+              {{ selectedDay.location }}
+            </span>
+            <p v-if="selectedDay.wfhPending" class="mt-2 text-[11px] font-semibold text-sky-700 dark:text-sky-300">
+              Work from home applied for this day — waiting for approval
+            </p>
+            <p v-else-if="selectedDay.status === 'wfh'" class="mt-2 text-[11px] font-semibold text-sky-700 dark:text-sky-300">
+              Approved work from home — counted as attended, no clock-in needed.
+            </p>
 
             <dl class="mt-4 grid grid-cols-3 xl:grid-cols-1 gap-3">
               <div class="flex items-center gap-2.5">

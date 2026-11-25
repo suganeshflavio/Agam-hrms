@@ -19,6 +19,7 @@ import {
   XCircle,
   Clock,
   TrendingUp,
+  Pencil,
   CreditCard,
   UserCheck,
   Award,
@@ -33,6 +34,7 @@ import {
 import { hrmsApi } from '@/redux/api/hrmsApi'
 import { useApiQuery, useApiMutation, useAppDispatch } from '@/redux/vueAdapter'
 import { apiBlob, apiRequest, type ApiError } from '@/services/apiClient'
+import AddEmployeeWizard from '@/components/employees/AddEmployeeWizard.vue'
 import type { Employee, Department, Designation, Grade, EmployeeDocument, Payslip, CompanyInfo } from '@/types/hrms'
 import { useMoney } from '@/composables/useMoney'
 import { usePermissions } from '@/composables/usePermissions'
@@ -84,6 +86,8 @@ const dispatch = useAppDispatch()
 const { can } = usePermissions()
 const canManageAccounts = computed(() => can('admin', 'create'))
 const canEditEmployee = computed(() => can('employees', 'edit'))
+// Edit details: the onboarding wizard, pre-filled with this employee.
+const isEditOpen = ref(false)
 const canUploadDocuments = computed(() => can('employees', 'create') || can('employees', 'edit'))
 const canVerifyDocuments = computed(() => can('employees', 'approve'))
 const isAccountBusy = ref(false)
@@ -322,7 +326,15 @@ const probationLabel = computed(() => {
         <span>Back to Employee Onboarding</span>
       </button>
 
-      <div class="flex items-center gap-2">
+      <div class="flex flex-wrap items-center gap-2">
+        <button
+          v-if="canEditEmployee"
+          @click="isEditOpen = true"
+          class="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 font-medium text-xs active:scale-95 transition-all"
+        >
+          <Pencil class="w-3.5 h-3.5" />
+          <span>Edit Profile</span>
+        </button>
         <button
           v-if="canEditEmployee"
           @click="openLifecycleModal"
@@ -446,7 +458,7 @@ const probationLabel = computed(() => {
         </div>
 
         <!-- Navigation Tabs -->
-        <div class="flex items-center gap-1 sm:gap-2 mt-8 pt-4 border-t border-slate-100 dark:border-slate-800/80 overflow-x-auto">
+        <div class="scroll-row items-center gap-1 sm:gap-2 mt-8 pt-4 border-t border-slate-100 dark:border-slate-800/80">
           <button
             v-for="tab in [
               { key: 'overview', label: '360° Overview' },
@@ -1142,5 +1154,9 @@ const probationLabel = computed(() => {
         </form>
       </div>
     </div>
+    <AddEmployeeWizard
+      v-if="isEditOpen && employee" :employee="employee"
+      @close="isEditOpen = false" @saved="showFeedback('Employee details updated')"
+    />
   </div>
 </template>

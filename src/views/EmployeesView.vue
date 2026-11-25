@@ -18,6 +18,7 @@ import {
   MapPin,
   Award,
   ShieldCheck,
+  Pencil,
 } from '@lucide/vue'
 import { hrmsApi } from '@/redux/api/hrmsApi'
 import { useApiQuery, useApiMutation } from '@/redux/vueAdapter'
@@ -45,7 +46,13 @@ const selectedDepartment = ref('All')
 const selectedStatus = ref('All')
 const selectedBranch = ref('All')
 const isModalOpen = ref(false)
+// Edit: the same wizard, pre-filled with the chosen employee.
+const editingEmployee = ref<Employee | null>(null)
 const successMessage = ref('')
+const onEmployeeSaved = (employee: Employee) => {
+  successMessage.value = `${employee.firstName} ${employee.lastName}'s details were updated`
+  setTimeout(() => (successMessage.value = ''), 3500)
+}
 
 const onEmployeeCreated = (employee: Employee) => {
   successMessage.value = `${employee.firstName} ${employee.lastName} added successfully!`
@@ -364,6 +371,14 @@ const exportToCsv = () => {
                     <Eye class="w-4 h-4" />
                   </button>
                   <button
+                    v-if="can('employees', 'edit')"
+                    @click="editingEmployee = emp"
+                    title="Edit Employee"
+                    class="p-1.5 rounded-lg text-slate-400 hover:text-[#1989d9] hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                  >
+                    <Pencil class="w-4 h-4" />
+                  </button>
+                  <button
                     v-if="canManageAccounts && emp.hasLogin && emp.id !== currentUser?.employeeId"
                     :disabled="resettingId === emp.id"
                     @click="handleResetPassword(emp)"
@@ -426,5 +441,9 @@ const exportToCsv = () => {
 
     <!-- Add Employee: multi-step onboarding wizard -->
     <AddEmployeeWizard v-if="isModalOpen" @close="isModalOpen = false" @created="onEmployeeCreated" />
+    <AddEmployeeWizard
+      v-if="editingEmployee" :employee="editingEmployee"
+      @close="editingEmployee = null" @saved="onEmployeeSaved"
+    />
   </div>
 </template>
