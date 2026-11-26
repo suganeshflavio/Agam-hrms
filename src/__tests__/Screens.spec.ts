@@ -381,7 +381,7 @@ describe('Screens backed by the API', () => {
     expect(wrapper.text()).toContain('1 overdue')
 
     // Filter to the project
-    await wrapper.findAll('button').find((b) => b.text().includes('Payroll Revamp') && b.text().includes('mine'))!.trigger('click')
+    await wrapper.findAll('button').find((b) => b.text().includes('Payroll Revamp') && b.text().includes('tasks ·'))!.trigger('click')
     await settle()
     expect(wrapper.findAll('[data-task]')).toHaveLength(1)
     expect(wrapper.text()).toContain('Open full project board')

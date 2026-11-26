@@ -5,10 +5,11 @@ import { formatDay } from '@/components/attendance/time'
 
 // To do / In progress / Done columns of compact task cards. Columns sit side by
 // side (stacked on phones); clicking a card opens it (emit "open").
-const props = withDefaults(defineProps<{ tasks: Todo[]; showProject?: boolean; showAssignee?: boolean; canAdd?: boolean }>(), {
+const props = withDefaults(defineProps<{ tasks: Todo[]; showProject?: boolean; showAssignee?: boolean; canAdd?: boolean; myId?: string }>(), {
   showProject: false,
   showAssignee: true,
   canAdd: true,
+  myId: '',
 })
 const emit = defineEmits<{ open: [task: Todo]; add: [status: TodoStatus] }>()
 
@@ -65,7 +66,7 @@ const initials = (name: string) => name.split(' ').map((n) => n[0]).join('').sli
         <div class="flex items-center justify-between gap-2 text-[11px] text-slate-500 dark:text-slate-400">
           <span v-if="showAssignee" class="inline-flex items-center gap-1.5 min-w-0">
             <span class="w-5 h-5 rounded-full bg-slate-200 dark:bg-slate-700 text-[9px] font-bold flex items-center justify-center text-slate-700 dark:text-slate-200 shrink-0">{{ initials(t.assigneeName) }}</span>
-            <span class="truncate">{{ t.assigneeName }}</span>
+            <span class="truncate" :class="myId && t.assigneeId === myId ? 'font-semibold text-[#1989d9]' : ''">{{ myId && t.assigneeId === myId ? 'You' : t.assigneeName }}</span>
           </span>
           <span v-else-if="!t.createdByMe" class="truncate">From {{ t.createdByName }}</span>
           <span v-else></span>
