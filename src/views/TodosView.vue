@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { AlertTriangle, ArrowRight, FolderKanban, LayoutGrid, Plus } from '@lucide/vue'
+import { AlertTriangle, ArrowRight, FolderKanban, LayoutGrid, Plus, UserRound } from '@lucide/vue'
 import { hrmsApi } from '@/redux/api/hrmsApi'
 import { useApiQuery } from '@/redux/vueAdapter'
 import { usePermissions } from '@/composables/usePermissions'
@@ -10,18 +10,20 @@ import TaskBoard from '@/components/work/TaskBoard.vue'
 import TaskDetailModal from '@/components/work/TaskDetailModal.vue'
 import TodoFormModal from '@/components/work/TodoFormModal.vue'
 
-// My Tasks: your todos and project tasks on one board (To do / In progress /
+// My Tasks: your todos, the ones you handed out, and your projects' tasks on one board (To do / In progress /
 // Done), filtered by project.
 const router = useRouter()
-const { hasEmployeeProfile } = usePermissions()
+const { user, hasEmployeeProfile } = usePermissions()
+const myId = computed(() => user.value?.employeeId || '')
 
-const { data: todos, isLoading, error } = useApiQuery<Todo[]>(hrmsApi.endpoints.getTodos, () => ({ view: 'mine' }))
+const { data: todos, isLoading, error } = useApiQuery<Todo[]>(hrmsApi.endpoints.getTodos, () => ({ view: 'team' }))
 const { data: projects } = useApiQuery<Project[]>(hrmsApi.endpoints.getProjects)
 
-// Filter: 'all' or a project id.
+// Filter: 'all', 'mine' (assigned to me) or a project id.
 const scope = ref<string>('all')
 const all = computed(() => todos.value || [])
-const countFor = (key: string) => (key === 'all' ? all.value.length : all.value.filter((t) => t.projectId === key).length)
+const countFor = (key: string) =>
+  key === 'all' ? all.value.length : key === 'mine' ? all.value.filter((t) => t.assigneeId === myId.value).length : all.value.filter((t) => t.projectId === key).length
 // My projects first (ones with my tasks), then the rest I belong to.
 const projectChips = computed(() =>
   [...(projects.value || [])].sort((a, b) => countFor(b.id) - countFor(a.id) || a.name.localeCompare(b.name)),
@@ -29,6 +31,7 @@ const projectChips = computed(() =>
 const selectedProject = computed(() => (projects.value || []).find((p) => p.id === scope.value))
 const tasks = computed(() => {
   if (scope.value === 'all') return all.value
+  if (scope.value === 'mine') return all.value.filter((t) => t.assigneeId === myId.value)
   return all.value.filter((t) => t.projectId === scope.value)
 })
 const overdue = computed(() => tasks.value.filter((t) => t.overdue).length)
@@ -64,7 +67,7 @@ const chip = (active: boolean) =>
     <div class="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3">
       <div>
         <h1 class="text-2xl font-extrabold text-slate-900 dark:text-white tracking-tight">My Tasks</h1>
-        <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">Your todos and project tasks in one board</p>
+        <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">Your tasks, the ones you assigned, and your project teams' tasks</p>
       </div>
       <button
         v-if="hasEmployeeProfile"
@@ -85,6 +88,9 @@ const chip = (active: boolean) =>
         <button type="button" class="flex items-center gap-2 px-3.5 py-2 rounded-2xl border text-xs font-bold cursor-pointer transition-colors" :class="chip(scope === 'all')" @click="scope = 'all'">
           <LayoutGrid class="w-4 h-4" /> All <span class="opacity-75">{{ countFor('all') }}</span>
         </button>
+        <button type="button" class="flex items-center gap-2 px-3.5 py-2 rounded-2xl border text-xs font-bold cursor-pointer transition-colors" :class="chip(scope === 'mine')" @click="scope = 'mine'">
+          <UserRound class="w-4 h-4" /> Assigned to me <span class="opacity-75">{{ countFor('mine') }}</span>
+        </button>
         <button
           v-for="p in projectChips" :key="p.id" type="button"
           class="flex items-center gap-2.5 pl-2 pr-3.5 py-1.5 rounded-2xl border text-xs font-bold cursor-pointer transition-colors"
@@ -96,7 +102,7 @@ const chip = (active: boolean) =>
           >{{ p.name.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase() }}</span>
           <span class="text-left">
             <span class="block leading-tight">{{ p.name }}</span>
-            <span class="block text-[10px] font-semibold opacity-75">{{ countFor(p.id) }} mine · {{ p.progress }}% done</span>
+            <span class="block text-[10px] font-semibold opacity-75">{{ countFor(p.id) }} tasks · {{ p.progress }}% done</span>
           </span>
         </button>
       </div>
@@ -111,7 +117,7 @@ const chip = (active: boolean) =>
           <div class="min-w-0">
             <p class="text-sm font-bold text-slate-900 dark:text-white truncate">{{ selectedProject.name }}</p>
             <p class="text-xs text-slate-500 dark:text-slate-400">
-              {{ selectedProject.clientName || 'Internal' }} · {{ selectedProject.status }} · showing your tasks on this project
+              {{ selectedProject.clientName || 'Internal' }} · {{ selectedProject.status }} · your team's tasks on this project
             </p>
           </div>
         </div>
@@ -137,7 +143,7 @@ const chip = (active: boolean) =>
         <div v-for="i in 3" :key="i" class="h-64 rounded-3xl bg-slate-100 dark:bg-slate-800 animate-pulse"></div>
       </div>
       <TaskBoard
-        v-else :tasks="tasks" :show-project="scope === 'all'" :show-assignee="false"
+        v-else :tasks="tasks" :show-project="scope === 'all'" :show-assignee="true" :my-id="myId"
         @open="(t) => (viewingTask = t)" @add="openNew"
       />
     </template>

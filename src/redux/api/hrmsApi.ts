@@ -436,8 +436,9 @@ export const hrmsApi = createApi({
       invalidatesTags: ['Projects'],
     }),
 
-    // Todos: view "mine" (assigned to me), "assigned" (I assigned to others) or "project" (a project's tasks)
-    getTodos: builder.query<Todo[], { view: 'mine' | 'assigned' | 'project'; projectId?: string }>({
+    // Todos: view "mine" (assigned to me), "team" (mine + ones I created + my projects' tasks),
+    // "assigned" (I assigned to others) or "project" (a project's tasks)
+    getTodos: builder.query<Todo[], { view: 'mine' | 'team' | 'assigned' | 'project'; projectId?: string }>({
       async queryFn({ view, projectId }) {
         return runQuery(() => apiRequest('/app/todos', { query: { view, projectId } }))
       },
