@@ -9,7 +9,7 @@ type Routes = Record<string, unknown>
 
 const MODULES: UserPermission['module'][] = [
   'admin', 'employees', 'onboarding', 'recruitment', 'attendance', 'leaves', 'payroll',
-  'performance', 'learning', 'expenses', 'exit', 'master-data',
+  'performance', 'learning', 'expenses', 'exit', 'master-data', 'projects',
 ]
 
 const all = (on: boolean) => ({ view: on, create: on, edit: on, delete: on, approve: on, export: on })
@@ -24,7 +24,9 @@ export const makeUser = (
   grants: Partial<Record<UserPermission['module'], Partial<UserPermission['actions']>>> = {},
 ): AuthUser => {
   const full = role === 'Super Admin' || role === 'HR Manager'
-  const defaults: typeof grants = role === 'Department Manager' ? { employees: { view: true } } : {}
+  const defaults: typeof grants = role === 'Department Manager' ? {
+  'GET /notifications': [],
+  'GET /notifications/unread_count': { unread_count: 0 }, employees: { view: true } } : {}
   return {
     id: '11',
     employeeId: '11',
@@ -74,6 +76,8 @@ const defaults: Routes = {
   'GET /app/branches': fixtures.branches,
   'GET /app/designations': [],
   'GET /app/grades': [],
+  'GET /app/projects': [],
+  'GET /app/todos': [],
   'GET /app/roles': fixtures.roles,
   'GET /app/workflows': [],
   'GET /app/stats': fixtures.stats,

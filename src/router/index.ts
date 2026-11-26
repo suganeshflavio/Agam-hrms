@@ -3,6 +3,9 @@ import { store } from '@/redux/store'
 import { can, type PermissionModule } from '@/composables/usePermissions'
 
 import DashboardView from '@/views/DashboardView.vue'
+import TodosView from '@/views/TodosView.vue'
+import ProjectsView from '@/views/ProjectsView.vue'
+import ProjectDetailView from '@/views/ProjectDetailView.vue'
 import LoginView from '@/views/LoginView.vue'
 import AdminView from '@/views/AdminView.vue'
 import MasterDataView from '@/views/MasterDataView.vue'
@@ -107,6 +110,24 @@ const router = createRouter({
       path: '/self-service',
       name: 'self-service',
       component: SelfServiceView,
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/todos',
+      name: 'todos',
+      component: TodosView,
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/projects',
+      name: 'projects',
+      component: ProjectsView,
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/projects/:id',
+      name: 'project-detail',
+      component: ProjectDetailView,
       meta: { requiresAuth: true },
     },
     {

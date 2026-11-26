@@ -1,5 +1,6 @@
 import { createApi, fakeBaseQuery } from '@reduxjs/toolkit/query'
 import { apiRequest, runQuery } from '@/services/apiClient'
+import type { AppNotification } from '@/types/notifications'
 import type { MasterDataItem, MasterDataCategory } from '@/types/mdm'
 import type {
   CompanyInfo,
@@ -19,6 +20,9 @@ import type {
   RegularizationRequest,
   RemoteWorkRequest,
   PunchState,
+  Project,
+  Todo,
+  TodoInput,
   WorkLocation,
   Resignation,
   LeaveTypePolicy,
@@ -46,11 +50,14 @@ export const hrmsApi = createApi({
     'Regularizations',
     'RemoteWork',
     'PunchState',
+    'Projects',
+    'Todos',
     'Resignations',
     'Leaves',
     'Payroll',
     'MasterData',
     'Workflows',
+    'Notifications',
   ],
   endpoints: (builder) => ({
     // Dashboard Stats (Release 1)
@@ -385,6 +392,76 @@ export const hrmsApi = createApi({
       invalidatesTags: ['Regularizations', 'Attendance', 'Stats'],
     }),
 
+    // Projects (members + task board)
+    getProjects: builder.query<Project[], void>({
+      async queryFn() {
+        return runQuery(() => apiRequest('/app/projects'))
+      },
+      providesTags: ['Projects'],
+    }),
+    getProject: builder.query<Project, string>({
+      async queryFn(id) {
+        return runQuery(() => apiRequest(`/app/projects/${id}`))
+      },
+      providesTags: ['Projects'],
+    }),
+    saveProject: builder.mutation<
+      Project,
+      { id?: string; name: string; clientName?: string; description?: string; status?: string; startDate?: string; endDate?: string;
+        managerId?: string; members?: { employeeId: string; role?: string }[] }
+    >({
+      async queryFn({ id, ...body }) {
+        return runQuery(() =>
+          id ? apiRequest(`/app/projects/${id}`, { method: 'PATCH', body: { updates: body } }) : apiRequest('/app/projects', { method: 'POST', body }),
+        )
+      },
+      invalidatesTags: ['Projects'],
+    }),
+    deleteProject: builder.mutation<boolean, string>({
+      async queryFn(id) {
+        return runQuery(() => apiRequest(`/app/projects/${id}`, { method: 'DELETE' }))
+      },
+      invalidatesTags: ['Projects', 'Todos'],
+    }),
+    addProjectMember: builder.mutation<Project, { projectId: string; employeeId: string; role?: string }>({
+      async queryFn({ projectId, ...body }) {
+        return runQuery(() => apiRequest(`/app/projects/${projectId}/members`, { method: 'POST', body }))
+      },
+      invalidatesTags: ['Projects'],
+    }),
+    removeProjectMember: builder.mutation<Project, { projectId: string; employeeId: string }>({
+      async queryFn({ projectId, employeeId }) {
+        return runQuery(() => apiRequest(`/app/projects/${projectId}/members/${employeeId}`, { method: 'DELETE' }))
+      },
+      invalidatesTags: ['Projects'],
+    }),
+
+    // Todos: view "mine" (assigned to me), "assigned" (I assigned to others) or "project" (a project's tasks)
+    getTodos: builder.query<Todo[], { view: 'mine' | 'assigned' | 'project'; projectId?: string }>({
+      async queryFn({ view, projectId }) {
+        return runQuery(() => apiRequest('/app/todos', { query: { view, projectId } }))
+      },
+      providesTags: ['Todos'],
+    }),
+    addTodo: builder.mutation<Todo, TodoInput>({
+      async queryFn(body) {
+        return runQuery(() => apiRequest('/app/todos', { method: 'POST', body }))
+      },
+      invalidatesTags: ['Todos', 'Projects'],
+    }),
+    updateTodo: builder.mutation<Todo, { id: string; updates: TodoInput }>({
+      async queryFn({ id, updates }) {
+        return runQuery(() => apiRequest(`/app/todos/${id}`, { method: 'PATCH', body: { updates } }))
+      },
+      invalidatesTags: ['Todos', 'Projects'],
+    }),
+    deleteTodo: builder.mutation<boolean, string>({
+      async queryFn(id) {
+        return runQuery(() => apiRequest(`/app/todos/${id}`, { method: 'DELETE' }))
+      },
+      invalidatesTags: ['Todos', 'Projects'],
+    }),
+
     // Work-from-home applications (approved days show as WFH in attendance)
     applyWfh: builder.mutation<RemoteWorkRequest, { fromDate: string; toDate: string; reason: string }>({
       async queryFn(body) {
@@ -572,6 +649,32 @@ export const hrmsApi = createApi({
         return runQuery(() => apiRequest(`/app/master_data/${id}`, { method: 'DELETE' }))
       },
       invalidatesTags: ['MasterData'],
+    }),
+
+    // Bell notifications (approvals, tasks, projects) for the signed-in user.
+    getNotifications: builder.query<AppNotification[], void>({
+      async queryFn() {
+        return runQuery(() => apiRequest('/notifications', { query: { per_page: 30 } }))
+      },
+      providesTags: ['Notifications'],
+    }),
+    getUnreadNotificationCount: builder.query<{ unread_count: number }, void>({
+      async queryFn() {
+        return runQuery(() => apiRequest('/notifications/unread_count'))
+      },
+      providesTags: ['Notifications'],
+    }),
+    markNotificationRead: builder.mutation<AppNotification, number | string>({
+      async queryFn(id) {
+        return runQuery(() => apiRequest(`/notifications/${id}/read`, { method: 'PATCH' }))
+      },
+      invalidatesTags: ['Notifications'],
+    }),
+    markAllNotificationsRead: builder.mutation<{ marked_read: number }, void>({
+      async queryFn() {
+        return runQuery(() => apiRequest('/notifications/read_all', { method: 'PATCH' }))
+      },
+      invalidatesTags: ['Notifications'],
     }),
   }),
 })

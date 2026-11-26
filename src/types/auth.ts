@@ -21,6 +21,7 @@ export interface UserPermission {
     | 'employees'
     | 'onboarding'
     | 'recruitment'
+    | 'projects'
     | 'attendance'
     | 'leaves'
     | 'payroll'

@@ -6,13 +6,14 @@ import {
   ShieldCheck,
   Users,
   UserCheck,
+  ListTodo,
+  FolderKanban,
   Clock,
   CalendarCheck,
   Banknote,
   LogOut,
   Menu,
   X,
-  Bell,
   ChevronLeft,
   ChevronRight,
   PanelLeftClose,
@@ -20,12 +21,11 @@ import {
   Sparkles,
 } from '@lucide/vue'
 import ThemeToggle from '@/components/common/ThemeToggle.vue'
+import NotificationBell from '@/components/layout/NotificationBell.vue'
 import AppLogo from '@/components/common/AppLogo.vue'
 import ZohoAuthLogo from '@/components/common/ZohoAuthLogo.vue'
-import { hrmsApi } from '@/redux/api/hrmsApi'
-import { useAppSelector, useAppDispatch, useApiQuery } from '@/redux/vueAdapter'
+import { useAppSelector, useAppDispatch } from '@/redux/vueAdapter'
 import { logout } from '@/redux/slices/authSlice'
-import type { HRMSDashboardStats } from '@/types/hrms'
 
 const route = useRoute()
 const router = useRouter()
@@ -42,14 +42,11 @@ const toggleSidebar = () => {
 
 const authUser = useAppSelector((state) => state.auth.user)
 
-const { data: stats } = useApiQuery<HRMSDashboardStats>(hrmsApi.endpoints.getStats)
 
 // Backend permission flags for a UI module key (admin, employees, attendance, leaves, payroll, ...).
-const can = (module: string, action: 'view' | 'approve' = 'view') =>
+const can = (module: string, action: 'view' = 'view') =>
   !!authUser.value?.permissions?.find((p) => p.module === module)?.actions?.[action]
 
-// Unread-style dot only when there is something the user can actually act on.
-const hasPendingApprovals = computed(() => can('leaves', 'approve') && (stats.value?.pendingLeaveRequests ?? 0) > 0)
 
 // Menu visibility follows HR Administration -> Roles & Permissions (the
 // "Read" column), sent by the backend and refreshed without re-login.
@@ -76,9 +73,18 @@ const navSections = computed(() => {
         { name: 'Employee Self-Service', path: '/self-service', icon: UserCheck, selfService: true },
       ].filter((item) => (item.selfService && hasEmployeeProfile) || (item.permission ? can(item.permission) : false)),
     },
+    {
+      title: 'Work',
+      items: [
+        // Employees: one "My Tasks" screen (todos + their project tasks). Roles with
+        // Projects & Tasks access also get the Projects page to manage projects.
+        { name: 'My Tasks', path: '/todos', icon: ListTodo, selfService: true },
+        { name: 'Projects', path: '/projects', icon: FolderKanban, permission: 'projects' },
+      ].filter((item) => (item.selfService && hasEmployeeProfile) || (item.permission ? can(item.permission) : false)),
+    },
   ]
 
-  return sections
+  return sections.filter((section) => section.items.length > 0)
 })
 
 const isActive = (path: string) => {
@@ -310,16 +316,13 @@ const handleLogout = () => {
     <!-- Main Content Area -->
     <div class="flex-1 flex flex-col min-w-0 min-h-screen">
       <!-- Desktop Top Navbar -->
-      <header class="hidden md:flex h-16 items-center justify-between px-8 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 sticky top-0 z-10">
+      <header class="hidden md:flex h-16 items-center justify-between px-8 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 sticky top-0 z-30">
         <div class="flex-1"></div>
 
         <div class="flex items-center gap-3">
           <ThemeToggle />
           <div class="h-6 w-px bg-slate-200 dark:bg-slate-800 mx-1"></div>
-          <button class="relative p-2 rounded-xl text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
-            <Bell class="w-4 h-4" />
-            <span v-if="hasPendingApprovals" class="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-rose-500 ring-2 ring-white dark:ring-slate-900"></span>
-          </button>
+          <NotificationBell />
         </div>
       </header>
 

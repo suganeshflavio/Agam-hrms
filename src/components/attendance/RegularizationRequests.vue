@@ -7,6 +7,7 @@ import { usePermissions } from '@/composables/usePermissions'
 import type { ApiError } from '@/services/apiClient'
 import type { RegularizationRequest } from '@/types/hrms'
 import { formatDay } from './time'
+import ListPagination from '@/components/common/ListPagination.vue'
 
 // Attendance regularization requests the user can see: their own, plus their
 // team's (managers) or everyone's (Super Admin / HR). Approve/Reject appears
@@ -30,6 +31,16 @@ const list = computed(() => {
   const all = [...(requests.value || [])].sort((a, b) => b.date.localeCompare(a.date))
   return filter.value === 'Pending' ? all.filter((r) => r.status === 'Pending') : all
 })
+
+// 10 per page; back to page 1 whenever the filter or the date range changes.
+const PAGE_SIZE = 10
+const page = ref(1)
+const paged = computed(() => list.value.slice((page.value - 1) * PAGE_SIZE, page.value * PAGE_SIZE))
+watch([filter, () => props.from, () => props.to], () => (page.value = 1))
+watch(
+  () => list.value.length,
+  (count) => (page.value = Math.min(page.value, Math.max(1, Math.ceil(count / PAGE_SIZE)))),
+)
 const waitingOnMe = computed(() => (requests.value || []).filter((r) => r.canAct).length)
 
 const busyId = ref('')
@@ -86,7 +97,7 @@ const STATUS: Record<RegularizationRequest['status'], string> = {
     </div>
 
     <ul v-else class="divide-y divide-slate-100 dark:divide-slate-800">
-      <li v-for="r in list" :key="r.id" class="p-4 sm:px-6 flex flex-col lg:flex-row lg:items-center gap-3">
+      <li v-for="r in paged" :key="r.id" class="p-4 sm:px-6 flex flex-col lg:flex-row lg:items-center gap-3">
         <div class="lg:w-56 shrink-0">
           <p class="text-sm font-bold text-slate-900 dark:text-white">
             {{ r.employeeId === myId ? 'You' : r.employeeName }}
@@ -125,5 +136,6 @@ const STATUS: Record<RegularizationRequest['status'], string> = {
         </div>
       </li>
     </ul>
+    <ListPagination v-if="list.length > PAGE_SIZE" v-model:page="page" :total="list.length" :page-size="PAGE_SIZE" />
   </div>
 </template>

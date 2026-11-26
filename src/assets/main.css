@@ -60,20 +60,23 @@ body {
 /*
  * Tab / button bars that scroll sideways on small screens instead of wrapping
  * or squeezing their buttons. The scrollbar is hidden; swipe to see more.
+ * In the components layer so utilities (e.g. lg:grid) can still override it.
  */
-.scroll-row {
-  display: flex;
-  overflow-x: auto;
-  overscroll-behavior-x: contain;
-  -webkit-overflow-scrolling: touch;
-  scrollbar-width: none;
-  scroll-snap-type: x proximity;
-}
-.scroll-row::-webkit-scrollbar {
-  display: none;
-}
-.scroll-row > * {
-  flex-shrink: 0;
-  white-space: nowrap;
-  scroll-snap-align: start;
+@layer components {
+  .scroll-row {
+    display: flex;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    scroll-snap-type: x proximity;
+  }
+  .scroll-row::-webkit-scrollbar {
+    display: none;
+  }
+  .scroll-row > * {
+    flex-shrink: 0;
+    white-space: nowrap;
+    scroll-snap-align: start;
+  }
 }

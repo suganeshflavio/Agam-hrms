@@ -126,8 +126,8 @@ describe('Screens backed by the API', () => {
     wrapper = await mountAt('/attendance')
     expect(wrapper.text()).toContain('My Attendance')
     expect(wrapper.text()).not.toContain('Shift Templates')
-    expect(wrapper.findAll('button.bg-emerald-500')).toHaveLength(1)
-    expect(wrapper.findAll('button.bg-rose-500')).toHaveLength(1)
+    expect(wrapper.findAll('[data-status="present"]')).toHaveLength(1)
+    expect(wrapper.findAll('[data-status="absent"]')).toHaveLength(1)
     expect(wrapper.text()).toContain('1 day(s) marked')
   })
 
@@ -144,7 +144,7 @@ describe('Screens backed by the API', () => {
     signIn(makeUser('General Employee'))
     wrapper = await mountAt('/attendance')
 
-    await wrapper.find('button.bg-rose-500').trigger('click')
+    await wrapper.find('[data-status="absent"]').trigger('click')
     await settle()
     const open = wrapper.findAll('button').find((b) => b.text().includes('Request regularization'))
     expect(open).toBeDefined()
@@ -270,7 +270,7 @@ describe('Screens backed by the API', () => {
     signIn(makeUser('General Employee'))
     wrapper = await mountAt('/attendance')
 
-    expect(wrapper.findAll('button.bg-sky-500')).toHaveLength(1)
+    expect(wrapper.findAll('[data-status="wfh"]')).toHaveLength(1)
     expect(wrapper.find('[title="Work from home pending approval"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('Work from home')
   })
@@ -288,13 +288,201 @@ describe('Screens backed by the API', () => {
 
     const d = new Date()
     const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-    for (const path of ['/app/regularizations', '/app/remote_work']) {
-      const ranged = fetchMock.mock.calls.some(([url]) => {
+    const ranged = (path: string) =>
+      fetchMock.mock.calls.some(([url]) => {
         const u = new URL(String(url), 'http://localhost')
         return u.pathname.endsWith(path) && u.searchParams.get('from') === today && u.searchParams.get('to') === today
       })
-      expect(ranged, path).toBe(true)
-    }
+    expect(ranged('/app/remote_work')).toBe(true) // Work From Home sub-tab is open first
+
+    await wrapper.findAll('[role="tab"]').find((b) => b.text().includes('Regularizations'))!.trigger('click')
+    await settle()
+    expect(ranged('/app/regularizations')).toBe(true)
+  })
+
+  it('pages long request lists 10 at a time', async () => {
+    const wfh = Array.from({ length: 23 }, (_, i) => ({
+      id: String(i + 1), employeeId: '12', employeeName: `Person ${i + 1}`, fromDate: '2026-11-23', toDate: '2026-11-23',
+      days: 1, reason: 'Working from home', status: 'Approved', appliedOn: '2026-11-20',
+    }))
+    stubBackend({ 'GET /app/remote_work': wfh })
+    signIn(makeUser('Super Admin'))
+    wrapper = await mountAt('/attendance')
+    await wrapper.findAll('button').find((b) => b.text().includes('Requests & Approvals'))!.trigger('click')
+    await settle()
+    await wrapper.findAll('button').find((b) => b.text() === 'All')!.trigger('click')
+    await settle()
+
+    expect(wrapper.text()).toContain('Showing 1–10 of 23')
+    await wrapper.findAll('button').find((b) => b.text().includes('Next'))!.trigger('click')
+    await settle()
+    expect(wrapper.text()).toContain('Showing 11–20 of 23')
+    await wrapper.findAll('button').find((b) => b.text() === '3')!.trigger('click')
+    await settle()
+    expect(wrapper.text()).toContain('Showing 21–23 of 23')
+  })
+
+  it('shows month summary cards, an encouragement message and quick actions on the calendar', async () => {
+    const month = thisMonth()
+    const days = Array.from({ length: 28 }, (_, i) => ({
+      date: `${month}-${String(i + 1).padStart(2, '0')}`,
+      status: i < 9 ? 'present' : i === 9 ? 'wfh' : 'upcoming',
+    }))
+    stubBackend({
+      'GET /app/attendance/calendar': { month, employeeId: '11', days, summary: { present: 9, wfh: 1, upcoming: 18 } },
+    })
+    signIn(makeUser('General Employee'))
+    wrapper = await mountAt('/attendance')
+
+    expect(wrapper.text()).toContain('10 / 10') // days present incl. WFH, out of working days so far
+    expect(wrapper.text()).toContain('Great job!')
+    expect(wrapper.text()).toContain('100% attendance this month')
+
+    await wrapper.findAll('button').find((b) => b.text().includes('Apply work from home'))!.trigger('click')
+    await settle()
+    expect(router.currentRoute.value.path).toBe('/self-service')
+    expect(router.currentRoute.value.query.tab).toBe('wfh')
+    expect(wrapper.text()).toContain('Apply Work From Home')
+  })
+
+  const todo = (over: Record<string, unknown> = {}) => ({
+    id: '1', title: 'Prepare attendance report', description: '', status: 'To do', priority: 'High', dueDate: '2026-11-01',
+    overdue: true, assigneeId: '11', assigneeName: 'Tester', createdById: '1', createdByName: 'Manager One', createdByMe: false,
+    createdAt: '2026-11-20T10:00:00Z', canEdit: false, canDelete: false, canChangeStatus: true, ...over,
+  })
+  const project = (over: Record<string, unknown> = {}) => ({
+    id: '7', name: 'Payroll Revamp', code: 'PAYROLL_REVAMP', clientName: 'Agam', description: '', status: 'Active',
+    startDate: '2026-11-01', endDate: '2026-12-31', managerId: '12', managerName: 'Ravi Kumar',
+    members: [{ employeeId: '11', name: 'Asha Rao', role: 'Developer' }],
+    taskCounts: { todo: 1, inProgress: 0, done: 1 }, progress: 50, canManage: false, ...over,
+  })
+
+  it('shows My Tasks as one board, filtered by project', async () => {
+    const fetchMock = stubBackend({
+      'GET /app/projects': [project()],
+      'GET /app/todos': [
+        todo(),
+        todo({ id: '2', title: 'Design payslip PDF', projectId: '7', projectName: 'Payroll Revamp', status: 'In progress', overdue: false }),
+      ],
+      'PATCH /app/todos/1': todo({ status: 'Done', overdue: false }),
+    })
+    signIn(makeUser('General Employee'))
+    wrapper = await mountAt('/todos')
+
+    const nav = wrapper.find('nav').exists() ? wrapper.find('nav').text() : wrapper.text()
+    expect(nav).toContain('My Tasks')
+    expect(nav).not.toContain('Projects') // employees reach their projects from My Tasks
+    expect(wrapper.text()).not.toContain('Assigned by me')
+    expect(wrapper.text()).not.toContain('Personal')
+
+    // Board: a todo in "To do", project task in "In progress"
+    expect(wrapper.find('[data-column="To do"]').text()).toContain('Prepare attendance report')
+    expect(wrapper.find('[data-column="In progress"]').text()).toContain('Design payslip PDF')
+    expect(wrapper.text()).toContain('1 overdue')
+
+    // Filter to the project
+    await wrapper.findAll('button').find((b) => b.text().includes('Payroll Revamp') && b.text().includes('mine'))!.trigger('click')
+    await settle()
+    expect(wrapper.findAll('[data-task]')).toHaveLength(1)
+    expect(wrapper.text()).toContain('Open full project board')
+
+    // Back to all, open the first todo and mark it done
+    await wrapper.findAll('button').find((b) => b.text().startsWith('All'))!.trigger('click')
+    await settle()
+    await wrapper.find('[data-task="1"]').trigger('click')
+    await settle()
+    await wrapper.find('[role="dialog"]').findAll('button').find((b) => b.text() === 'Done')!.trigger('click')
+    await settle()
+    const call = fetchMock.mock.calls.find(([url, init]) => String(url).endsWith('/app/todos/1') && (init as RequestInit)?.method === 'PATCH')
+    expect(JSON.parse(String((call![1] as RequestInit).body))).toEqual({ updates: { status: 'Done' } })
+  })
+
+  it('shows approval and task notifications in the bell and opens them', async () => {
+    const fetchMock = stubBackend({
+      'GET /app/projects': [],
+      'GET /app/todos': [],
+      'GET /notifications/unread_count': { unread_count: 2 },
+      'GET /notifications': [
+        { id: 31, category: 'approval_requested', title: 'Approval required: WFH 2–3 Dec', body: 'Asha Rao submitted it for your approval.', data: {}, record_type: 'RemoteWorkRequest', record_id: 4, read: false, read_at: null, created_at: new Date().toISOString() },
+        { id: 30, category: 'todo', title: 'New task: Write tests', body: 'From Ravi Kumar', data: { project_id: '7' }, record_type: 'Todo', record_id: 9, read: false, read_at: null, created_at: new Date().toISOString() },
+      ],
+      'PATCH /notifications/30/read': { id: 30, read: true },
+    })
+    signIn(makeUser('General Employee'))
+    wrapper = await mountAt('/todos')
+
+    expect(wrapper.find('[data-unread]').text()).toBe('2')
+    await wrapper.find('button[aria-label="Notifications"]').trigger('click')
+    await settle()
+    expect(wrapper.text()).toContain('Approval required: WFH 2–3 Dec')
+    expect(wrapper.text()).toContain('2 new')
+
+    await wrapper.find('[data-notification="30"]').trigger('click')
+    await settle()
+    expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith('/notifications/30/read') && (init as RequestInit)?.method === 'PATCH')).toBe(true)
+    expect(router.currentRoute.value.path).toBe('/todos')
+  })
+
+  it('lists projects and adds a task on the project board', async () => {
+    const fetchMock = stubBackend({
+      'GET /app/projects': [project()],
+      'GET /app/projects/7': project(),
+      'GET /app/todos': [todo({ id: '5', title: 'Design payslip PDF', projectId: '7', projectName: 'Payroll Revamp', status: 'In progress' })],
+      'POST /app/todos': todo({ id: '6', title: 'Write tests', projectId: '7' }),
+    })
+    signIn(makeUser('General Employee'))
+    wrapper = await mountAt('/projects')
+    expect(wrapper.text()).toContain('Payroll Revamp')
+    expect(wrapper.text()).toContain('1 of 2 tasks done')
+    expect(wrapper.text()).not.toContain('New project') // needs Projects & Tasks "Write"
+
+    await router.push('/projects/7')
+    await settle()
+    expect(wrapper.text()).toContain('Task board')
+    expect(wrapper.text()).toContain('Design payslip PDF')
+    expect(wrapper.findAll('[data-task]')).toHaveLength(1) // compact cards; details open on click
+    await wrapper.find('[data-task="5"]').trigger('click')
+    await settle()
+    expect(wrapper.find('[role="dialog"]').text()).toContain('Design payslip PDF')
+    expect(wrapper.find('[role="dialog"]').text()).toContain('Assigned to')
+    await wrapper.find('button[aria-label="Close"]').trigger('click')
+    await settle()
+    expect(wrapper.text()).not.toContain('Add to project') // only managers manage members
+
+    await wrapper.findAll('button').find((b) => b.text().includes('Add task'))!.trigger('click')
+    await settle()
+    const form = wrapper.find('form')
+    await form.find('input[type="text"]').setValue('Write tests')
+    await form.trigger('submit')
+    await settle()
+    expect(postBody(fetchMock, '/app/todos')).toMatchObject({ title: 'Write tests', projectId: '7', status: 'To do' })
+  })
+
+  it('sets a leave policy quota per salary grade', async () => {
+    const fetchMock = stubBackend({
+      'GET /app/grades': [{ id: '1', name: 'L1 Junior', level: 1 }, { id: '2', name: 'L2 Senior', level: 2 }],
+      'GET /app/leave_policies': [{ id: '9', name: 'Sick', totalAllowedPerYear: 10, accrualFrequency: 'Yearly', carryForwardAllowed: false,
+                                    maxCarryForwardDays: 0, paid: true, gradeQuotas: [{ gradeId: '1', grade: 'L1 Junior', quota: 12 }] }],
+      'PATCH /app/leave_policies/9': { id: '9', name: 'Sick', totalAllowedPerYear: 10 },
+    })
+    signIn(makeUser('Super Admin'))
+    wrapper = await mountAt('/leaves')
+    await wrapper.findAll('button').find((b) => b.text().includes('Leave Policies'))!.trigger('click')
+    await settle()
+    expect(wrapper.text()).toContain('L1 Junior: 12 days')
+
+    const edit = wrapper.findAll('button').find((b) => b.attributes('title')?.includes('Edit') || b.text().trim() === 'Edit')
+    await edit!.trigger('click')
+    await settle()
+    await wrapper.find('input[aria-label="L2 Senior days per year"]').setValue('15')
+    await wrapper.findAll('button').find((b) => /save|update/i.test(b.text()) && !b.text().includes('Policies'))!.trigger('click')
+    await settle()
+
+    const call = fetchMock.mock.calls.find(([url, init]) => String(url).endsWith('/app/leave_policies/9') && (init as RequestInit)?.method === 'PATCH')
+    expect(call).toBeDefined()
+    expect(JSON.parse(String((call![1] as RequestInit).body)).updates.gradeQuotas).toEqual([
+      { gradeId: '1', quota: 12 }, { gradeId: '2', quota: 15 },
+    ])
   })
 
   it('asks for confirmation before submitting a resignation', async () => {

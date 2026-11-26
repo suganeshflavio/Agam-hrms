@@ -158,10 +158,13 @@ const { data: regularizations } = useApiQuery<RegularizationRequest[]>(hrmsApi.e
 const showRegularizations = computed(() => hasEmployeeProfile.value || showRegister.value)
 const { data: remoteWork } = useApiQuery<RemoteWorkRequest[]>(hrmsApi.endpoints.getRemoteWork)
 const remoteWaiting = computed(() => (remoteWork.value || []).filter((r) => r.canAct && r.status === 'Pending').length)
-// Waiting on the signed-in user: regularizations plus work-from-home sessions.
-const regularizationsWaiting = computed(
-  () => (regularizations.value || []).filter((r) => r.canAct && r.status === 'Pending').length + remoteWaiting.value,
+// Waiting on the signed-in user (badges): each sub-tab, and both together on the main tab.
+const regularizationOnlyWaiting = computed(
+  () => (regularizations.value || []).filter((r) => r.canAct && r.status === 'Pending').length,
 )
+const regularizationsWaiting = computed(() => regularizationOnlyWaiting.value + remoteWaiting.value)
+// Requests & Approvals sub-tabs.
+const approvalTab = ref<'wfh' | 'regularizations'>('wfh')
 
 // Requests & Approvals date filter (Super Admin / HR see everyone, managers their team).
 const isoDate = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
@@ -207,9 +210,19 @@ const PRESETS: { id: RangePreset; label: string }[] = [
 // "Request regularization" from the clock-in card lands here with ?regularize=YYYY-MM-DD.
 const route = useRoute()
 const regularizeDate = computed(() => (typeof route.query.regularize === 'string' ? route.query.regularize : undefined))
+// Bell notifications for approvers link here with ?tab=approvals&sub=wfh|regularizations.
+const wantsApprovals = () => route.query.tab === 'approvals' && showRegister.value
 const activeTab = ref<'daily' | 'calendar' | 'regularizations' | 'shifts'>(
-  regularizeDate.value || !showRegister.value ? 'calendar' : 'daily',
+  wantsApprovals() ? 'regularizations' : regularizeDate.value || !showRegister.value ? 'calendar' : 'daily',
 )
+const applySubTab = () => {
+  if (route.query.sub === 'wfh' || route.query.sub === 'regularizations') approvalTab.value = route.query.sub
+}
+applySubTab()
+watch(() => [route.query.tab, route.query.sub], () => {
+  if (wantsApprovals()) activeTab.value = 'regularizations'
+  applySubTab()
+})
 watch(regularizeDate, (date) => {
   if (date) activeTab.value = 'calendar'
 })
@@ -431,8 +444,25 @@ const myShift = computed(() => {
         </div>
       </div>
 
-      <RemoteWorkRequests :from="rangeFrom || undefined" :to="rangeTo || undefined" />
-      <RegularizationRequests :from="rangeFrom || undefined" :to="rangeTo || undefined" />
+      <!-- Sub-tabs: one list at a time -->
+      <div class="scroll-row items-center gap-1 p-1 rounded-2xl bg-slate-100 dark:bg-slate-800/60 w-fit max-w-full" role="tablist">
+        <button
+          v-for="t in [
+            { id: 'wfh', label: 'Work From Home', waiting: remoteWaiting },
+            { id: 'regularizations', label: 'Regularizations', waiting: regularizationOnlyWaiting },
+          ] as const"
+          :key="t.id" type="button" role="tab" :aria-selected="approvalTab === t.id"
+          class="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold cursor-pointer transition-colors"
+          :class="approvalTab === t.id ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs' : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'"
+          @click="approvalTab = t.id"
+        >
+          {{ t.label }}
+          <span v-if="t.waiting" class="min-w-5 h-5 px-1.5 rounded-full bg-amber-400 text-white text-[10px] flex items-center justify-center">{{ t.waiting }}</span>
+        </button>
+      </div>
+
+      <RemoteWorkRequests v-if="approvalTab === 'wfh'" :from="rangeFrom || undefined" :to="rangeTo || undefined" />
+      <RegularizationRequests v-else :from="rangeFrom || undefined" :to="rangeTo || undefined" />
     </div>
     <div v-if="activeTab === 'calendar'">
       <AttendanceCalendar v-if="hasEmployeeProfile" :regularize-date="regularizeDate" />

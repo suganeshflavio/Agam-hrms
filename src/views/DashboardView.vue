@@ -12,6 +12,9 @@ import {
   TrendingUp,
   CalendarCheck,
   Fingerprint,
+  Sun,
+  SunMedium,
+  Moon,
 } from '@lucide/vue'
 import { hrmsApi } from '@/redux/api/hrmsApi'
 import PunchControl from '@/components/attendance/PunchControl.vue'
@@ -27,6 +30,13 @@ const canViewOrganization = computed(() => authUser.value?.dataScope === 'all')
 const canViewAllAttendance = computed(() => can('attendance', 'view'))
 const canViewAllLeaves = computed(() => can('leaves', 'view'))
 const currentUserName = computed(() => authUser.value?.name || '')
+// Time-of-day greeting with a small icon (instead of an emoji, which renders differently per browser).
+const greeting = computed(() => {
+  const hour = new Date().getHours()
+  if (hour < 12) return { text: 'Good morning', icon: Sun }
+  if (hour < 17) return { text: 'Good afternoon', icon: SunMedium }
+  return { text: 'Good evening', icon: Moon }
+})
 
 // Fetch stats, leaves, attendance, and employees via Redux Toolkit API
 const { data: stats } = useApiQuery<HRMSStats>(hrmsApi.endpoints.getStats)
@@ -95,7 +105,7 @@ const handleReject = async (id: string) => {
 <template>
   <div class="space-y-8 max-w-7xl mx-auto">
     <!-- Welcome Header & Quick Punch (AGAM Technologies Brand Palette) -->
-    <div class="relative overflow-hidden flex flex-col xl:flex-row xl:items-center justify-between gap-5 p-6 rounded-3xl bg-gradient-to-r from-[#044663] via-[#095f87] to-[#1989d9] text-white shadow-xl shadow-[#044663]/20">
+    <div class="relative isolate overflow-hidden flex flex-col xl:flex-row xl:items-center justify-between gap-5 p-5 sm:p-6 rounded-3xl bg-gradient-to-r from-[#044663] via-[#095f87] to-[#1989d9] text-white shadow-xl shadow-[#044663]/20">
       <!-- Subtle Decorative Logo Backdrop / Watermark -->
       <div class="absolute -right-8 -bottom-10 opacity-10 pointer-events-none w-72 h-72">
         <svg viewBox="20 20 570 510" class="w-full h-full fill-white">
@@ -108,8 +118,11 @@ const handleReject = async (id: string) => {
           <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
           <span>{{ canViewOrganization ? 'Full Organization View' : 'My Team Hub' }}</span>
         </div>
-        <h1 class="text-2xl md:text-3xl font-extrabold tracking-tight">
-          Welcome back{{ currentUserName ? `, ${currentUserName}` : '' }} 👋
+        <h1 class="flex items-center gap-3 text-xl sm:text-2xl md:text-3xl font-extrabold tracking-tight">
+          <span class="inline-flex items-center justify-center w-9 h-9 sm:w-10 sm:h-10 rounded-2xl bg-white/15 border border-white/20 shrink-0">
+            <component :is="greeting.icon" class="w-5 h-5 text-amber-200" />
+          </span>
+          <span class="min-w-0 break-words">{{ greeting.text }}{{ currentUserName ? `, ${currentUserName}` : '' }}</span>
         </h1>
         <p class="text-sky-100 text-sm mt-1 max-w-xl">
           Here is your internal HR operational summary for today, {{ new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' }) }}.
