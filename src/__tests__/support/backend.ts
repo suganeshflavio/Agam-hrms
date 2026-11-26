@@ -24,9 +24,7 @@ export const makeUser = (
   grants: Partial<Record<UserPermission['module'], Partial<UserPermission['actions']>>> = {},
 ): AuthUser => {
   const full = role === 'Super Admin' || role === 'HR Manager'
-  const defaults: typeof grants = role === 'Department Manager' ? {
-  'GET /notifications': [],
-  'GET /notifications/unread_count': { unread_count: 0 }, employees: { view: true } } : {}
+  const defaults: typeof grants = role === 'Department Manager' ? { employees: { view: true } } : {}
   return {
     id: '11',
     employeeId: '11',
@@ -71,6 +69,8 @@ export const fixtures = {
 }
 
 const defaults: Routes = {
+  'GET /notifications': [],
+  'GET /notifications/unread_count': { unread_count: 0 },
   'GET /app/employees': fixtures.employees,
   'GET /app/departments': fixtures.departments,
   'GET /app/branches': fixtures.branches,
