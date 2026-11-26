@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, computed, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useForm } from 'vee-validate'
 import { toTypedSchema } from '@vee-validate/zod'
 import { z } from 'zod'
@@ -63,7 +63,12 @@ const [applyLeave, { isLoading: isApplyingLeave }] = useApiMutation(hrmsApi.endp
 
 // Tab & Modal State
 type EssTab = 'overview' | 'leaves' | 'payslips' | 'attendance' | 'wfh' | 'resignation'
-const activeTab = ref<EssTab>('overview')
+// ?tab=wfh (e.g. from the attendance calendar's quick actions) opens that tab.
+const route = useRoute()
+const ESS_TABS: EssTab[] = ['overview', 'leaves', 'payslips', 'attendance', 'wfh', 'resignation']
+const tabFromRoute = () => (ESS_TABS.includes(route.query.tab as EssTab) ? (route.query.tab as EssTab) : 'overview')
+const activeTab = ref<EssTab>(tabFromRoute())
+watch(() => route.query.tab, () => (activeTab.value = tabFromRoute()))
 const isLeaveModalOpen = ref(false)
 const selectedPayslip = ref<Payslip | null>(null)
 const notification = ref('')

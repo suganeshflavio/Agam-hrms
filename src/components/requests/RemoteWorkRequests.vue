@@ -7,6 +7,7 @@ import { usePermissions } from '@/composables/usePermissions'
 import type { ApiError } from '@/services/apiClient'
 import type { RemoteWorkRequest } from '@/types/hrms'
 import { formatDay } from '@/components/attendance/time'
+import ListPagination from '@/components/common/ListPagination.vue'
 
 // Work-from-home applications: applied for a date range like leave and approved
 // through the company's WFH approval workflow. Approved days show as "WFH" in
@@ -36,6 +37,16 @@ const list = computed(() => {
   all.sort((a, b) => b.fromDate.localeCompare(a.fromDate) || Number(b.id) - Number(a.id))
   return filter.value === 'Pending' ? all.filter((r) => r.status === 'Pending') : all
 })
+
+// 10 per page; back to page 1 whenever the filter or the date range changes.
+const PAGE_SIZE = 10
+const page = ref(1)
+const paged = computed(() => list.value.slice((page.value - 1) * PAGE_SIZE, page.value * PAGE_SIZE))
+watch([filter, () => props.from, () => props.to], () => (page.value = 1))
+watch(
+  () => list.value.length,
+  (count) => (page.value = Math.min(page.value, Math.max(1, Math.ceil(count / PAGE_SIZE)))),
+)
 const waitingOnMe = computed(() => (requests.value || []).filter((r) => r.canAct && r.status === 'Pending').length)
 
 // ---- apply form
@@ -150,7 +161,7 @@ const inputCls =
     </div>
 
     <ul v-else class="divide-y divide-slate-100 dark:divide-slate-800">
-      <li v-for="r in list" :key="r.id" class="p-4 sm:px-6 flex flex-col lg:flex-row lg:items-center gap-3">
+      <li v-for="r in paged" :key="r.id" class="p-4 sm:px-6 flex flex-col lg:flex-row lg:items-center gap-3">
         <div class="lg:w-56 shrink-0">
           <p class="text-sm font-bold text-slate-900 dark:text-white">{{ r.employeeId === myId ? 'You' : r.employeeName }}</p>
           <p class="text-xs text-slate-500 dark:text-slate-400">Applied {{ formatDay(r.appliedOn) }}</p>
@@ -191,6 +202,7 @@ const inputCls =
         </div>
       </li>
     </ul>
+    <ListPagination v-if="list.length > PAGE_SIZE" v-model:page="page" :total="list.length" :page-size="PAGE_SIZE" />
 
     <!-- Apply modal (a bottom sheet on phones) -->
     <div v-if="showForm" class="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/50 backdrop-blur-xs sm:p-4" @click.self="showForm = false">

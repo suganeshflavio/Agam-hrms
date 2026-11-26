@@ -328,6 +328,8 @@ export interface LeaveTypePolicy {
   carryForwardMax?: number
   paid?: boolean
   description?: string
+  /** Yearly quota per salary grade; employees without one get totalAllowedPerYear. */
+  gradeQuotas?: { gradeId: string; grade?: string; quota: number }[]
 }
 
 export interface Holiday {
@@ -564,4 +566,67 @@ export interface PunchState {
   /** Work from home applied for today. */
   wfhToday?: 'Approved' | 'Pending'
   record?: AttendanceRecord
+}
+
+export type ProjectStatus = 'Planned' | 'Active' | 'On Hold' | 'Completed' | 'Cancelled'
+
+export interface ProjectMember {
+  employeeId: string
+  name: string
+  designation?: string
+  role?: string
+}
+
+export interface Project {
+  id: string
+  name: string
+  code: string
+  clientName: string
+  description: string
+  status: ProjectStatus
+  startDate?: string
+  endDate?: string
+  managerId?: string
+  managerName?: string
+  members: ProjectMember[]
+  taskCounts: { todo: number; inProgress: number; done: number }
+  progress: number
+  /** The signed-in user can edit the project and its members. */
+  canManage: boolean
+}
+
+export type TodoStatus = 'To do' | 'In progress' | 'Done'
+export type TodoPriority = 'Low' | 'Medium' | 'High'
+
+/** A personal todo, one assigned by a manager / HR, or a project task. */
+export interface Todo {
+  id: string
+  title: string
+  description: string
+  status: TodoStatus
+  priority: TodoPriority
+  dueDate?: string
+  overdue: boolean
+  assigneeId: string
+  assigneeName: string
+  createdById: string
+  createdByName: string
+  createdByMe: boolean
+  projectId?: string
+  projectName?: string
+  completedAt?: string
+  createdAt: string
+  canEdit: boolean
+  canDelete: boolean
+  canChangeStatus: boolean
+}
+
+export interface TodoInput {
+  title?: string
+  description?: string
+  dueDate?: string
+  priority?: TodoPriority
+  status?: TodoStatus
+  assigneeId?: string
+  projectId?: string
 }

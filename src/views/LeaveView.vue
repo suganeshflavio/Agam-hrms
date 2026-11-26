@@ -21,7 +21,7 @@ import {
 } from '@lucide/vue'
 import { hrmsApi } from '@/redux/api/hrmsApi'
 import { useApiQuery, useApiMutation, useAppSelector } from '@/redux/vueAdapter'
-import type { LeaveRequest, Employee, LeaveTypePolicy, Holiday, LeaveBalance } from '@/types/hrms'
+import type { LeaveRequest, Employee, LeaveTypePolicy, Holiday, LeaveBalance, Grade } from '@/types/hrms'
 import FormInput from '@/components/forms/FormInput.vue'
 import FormSelect from '@/components/forms/FormSelect.vue'
 import FormTextarea from '@/components/forms/FormTextarea.vue'
@@ -47,6 +47,9 @@ const { data: employees } = useApiQuery<Employee[]>(hrmsApi.endpoints.getEmploye
 const { data: policies } = useApiQuery<LeaveTypePolicy[]>(hrmsApi.endpoints.getLeavePolicies)
 const { data: holidays } = useApiQuery<Holiday[]>(hrmsApi.endpoints.getHolidays)
 const { data: leaveBalances } = useApiQuery<LeaveBalance[]>(hrmsApi.endpoints.getLeaveBalances)
+// Salary grades for per-grade leave quotas (e.g. L1 Junior 12 days, L2 Senior 15 days).
+const { data: grades } = useApiQuery<Grade[]>(hrmsApi.endpoints.getGrades)
+const sortedGrades = computed(() => [...(grades.value || [])].sort((a, b) => (a.level ?? 0) - (b.level ?? 0) || a.name.localeCompare(b.name)))
 
 // Calendar year shown on the holiday tab: from the holidays themselves, else the current year.
 const holidayYears = computed(() => {
@@ -211,7 +214,13 @@ const policyForm = ref({
   accrualFrequency: 'Monthly' as 'Monthly' | 'Quarterly' | 'Yearly',
   paid: true,
   description: '',
+  // gradeId -> days per year ('' = use the default above)
+  gradeQuotas: {} as Record<string, number | ''>,
 })
+const gradeQuotaPayload = () =>
+  Object.entries(policyForm.value.gradeQuotas)
+    .filter(([, quota]) => quota !== '' && quota !== null && quota !== undefined)
+    .map(([gradeId, quota]) => ({ gradeId, quota: Number(quota) }))
 
 const openAddPolicyModal = () => {
   if (!canCreateLeaveSetup.value) return
@@ -224,6 +233,7 @@ const openAddPolicyModal = () => {
     accrualFrequency: 'Monthly',
     paid: true,
     description: '',
+    gradeQuotas: {},
   }
   isPolicyModalOpen.value = true
 }
@@ -239,6 +249,7 @@ const openEditPolicyModal = (p: LeaveTypePolicy) => {
     accrualFrequency: p.accrualFrequency,
     paid: p.paid ?? (p.name !== 'Unpaid'),
     description: p.description || '',
+    gradeQuotas: Object.fromEntries((p.gradeQuotas || []).map((q) => [q.gradeId, q.quota])),
   }
   isPolicyModalOpen.value = true
 }
@@ -261,6 +272,7 @@ const handleSavePolicy = async () => {
         paid: policyForm.value.paid,
         carryForwardAllowed: Number(policyForm.value.maxCarryForwardDays) > 0,
         description: policyForm.value.description.trim(),
+        gradeQuotas: gradeQuotaPayload(),
       },
     })
     showNotification(`Leave policy "${policyForm.value.name}" updated successfully!`)
@@ -273,6 +285,7 @@ const handleSavePolicy = async () => {
       paid: policyForm.value.paid,
       carryForwardAllowed: Number(policyForm.value.maxCarryForwardDays) > 0,
       description: policyForm.value.description.trim(),
+      gradeQuotas: gradeQuotaPayload(),
     })
     showNotification(`Leave policy "${policyForm.value.name}" added successfully!`)
   }
@@ -641,6 +654,12 @@ const handleDeleteHoliday = async (h: Holiday) => {
             <p class="text-2xl font-black text-[#0e6db3] dark:text-[#38a5e4] mt-1 font-mono">
               {{ policy.totalAllowedPerYear }} Days <span class="text-xs font-normal text-slate-400">/ year</span>
             </p>
+            <div v-if="policy.gradeQuotas?.length" class="flex flex-wrap gap-1.5 mt-2">
+              <span
+                v-for="q in policy.gradeQuotas" :key="q.gradeId"
+                class="px-2 py-0.5 rounded-md text-[11px] font-semibold bg-[#1989d9]/10 text-[#0e6db3] dark:text-[#38a5e4]"
+              >{{ q.grade }}: {{ q.quota }} days</span>
+            </div>
           </div>
 
           <div class="space-y-2 pt-3 border-t border-slate-100 dark:border-slate-800/80 text-xs">
@@ -873,6 +892,29 @@ const handleDeleteHoliday = async (h: Holiday) => {
                 min="0"
                 class="w-full px-3.5 py-2.5 text-xs bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-xl focus:outline-hidden focus:border-[#1989d9] text-slate-800 dark:text-slate-200"
               />
+            </div>
+          </div>
+          <!-- Yearly quota per salary grade -->
+          <div v-if="sortedGrades.length" class="space-y-2">
+            <div>
+              <p class="text-xs font-semibold text-slate-700 dark:text-slate-300">Quota by salary grade <span class="font-normal text-slate-400">(optional)</span></p>
+              <p class="text-[11px] text-slate-400 mt-0.5">Leave a grade blank to use the default of {{ policyForm.totalAllowedPerYear || 0 }} days.</p>
+            </div>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <label
+                v-for="g in sortedGrades" :key="g.id"
+                class="flex items-center justify-between gap-3 px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700"
+              >
+                <span class="text-xs font-semibold text-slate-700 dark:text-slate-200 truncate">{{ g.name }}</span>
+                <span class="flex items-center gap-1.5 shrink-0">
+                  <input
+                    v-model="policyForm.gradeQuotas[g.id]" type="number" min="0" max="366" step="0.5"
+                    :placeholder="String(policyForm.totalAllowedPerYear || 0)" :aria-label="`${g.name} days per year`"
+                    class="w-20 px-2.5 py-1.5 text-xs text-right bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg focus:outline-hidden focus:border-[#1989d9]"
+                  />
+                  <span class="text-[11px] text-slate-400">days</span>
+                </span>
+              </label>
             </div>
           </div>
 
