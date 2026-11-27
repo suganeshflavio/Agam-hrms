@@ -25,4 +25,14 @@ export const REPORTS: ReportDefinition[] = [
     permission: 'attendance', team: true,
     description: 'Days with a check-in but no check-out, and whether a regularization was requested.',
   },
+  {
+    name: 'loss_of_pay', title: 'Loss of pay (LOP)', group: 'Leave', filter: 'month', department: true,
+    permission: 'leaves', team: true,
+    description: 'Employees with unpaid leave or absences in the month, with LOP and payable days.',
+  },
+  {
+    name: 'leave_by_department', title: 'Leave by department', group: 'Leave', filter: 'range',
+    permission: 'leaves', team: true,
+    description: 'Approved leave days per department and leave type for a period.',
+  },
 ]

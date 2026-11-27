@@ -387,6 +387,30 @@ export interface LeaveTypePolicy {
   description?: string
   /** Yearly quota per salary grade; employees without one get totalAllowedPerYear. */
   gradeQuotas?: { gradeId: string; grade?: string; quota: number }[]
+  /** A supporting document is needed for leave longer than documentAfterDays. */
+  requiresDocument?: boolean
+  documentAfterDays?: number
+  encashable?: boolean
+  /** Per year; empty = no limit. */
+  maxEncashDays?: number | null
+}
+
+export interface LeaveEncashment {
+  id: string
+  employeeId: string
+  employeeName: string
+  leaveType: string
+  year: number
+  days: number
+  perDayAmount: number
+  amount: number
+  reason?: string
+  status: 'Pending' | 'Approved' | 'Rejected' | 'Cancelled'
+  appliedOn: string
+  /** Payroll month that paid it. */
+  paidIn?: string
+  canAct?: boolean
+  canCancel?: boolean
 }
 
 export interface Holiday {
@@ -423,6 +447,8 @@ export interface LeaveRequest {
   reason: string
   status: 'Pending' | 'Approved' | 'Rejected'
   appliedOn: string
+  /** A supporting document was uploaded (GET /app/leave_requests/:id/document). */
+  hasDocument?: boolean
   /** True when the signed-in user can approve/reject the current step. */
   canAct?: boolean
 }

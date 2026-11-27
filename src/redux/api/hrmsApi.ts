@@ -30,6 +30,7 @@ import type {
   Holiday,
   LeaveRequest,
   LeaveBalance,
+  LeaveEncashment,
   Payslip,
   HRMSDashboardStats,
   ReportResult,
@@ -621,11 +622,42 @@ export const hrmsApi = createApi({
       },
       providesTags: ['Leaves'],
     }),
-    applyLeave: builder.mutation<LeaveRequest, Omit<LeaveRequest, 'id' | 'appliedOn' | 'status'>>({
-      async queryFn(payload) {
+    applyLeave: builder.mutation<LeaveRequest, Omit<LeaveRequest, 'id' | 'appliedOn' | 'status'> & { document?: File | null }>({
+      async queryFn({ document, ...payload }) {
+        // With a supporting document the request goes as multipart form data.
+        if (document) {
+          const body = new FormData()
+          Object.entries(payload).forEach(([k, v]) => v !== undefined && v !== null && body.append(k, String(v)))
+          body.append('document', document)
+          return runQuery(() => apiRequest('/app/leave_requests', { method: 'POST', body }))
+        }
         return runQuery(() => apiRequest('/app/leave_requests', { method: 'POST', body: payload }))
       },
       invalidatesTags: ['Leaves', 'Stats'],
+    }),
+    getLeaveEncashments: builder.query<LeaveEncashment[], void>({
+      async queryFn() {
+        return runQuery(() => apiRequest('/app/leave_encashments'))
+      },
+      providesTags: ['Leaves'],
+    }),
+    requestLeaveEncashment: builder.mutation<LeaveEncashment, { leaveType: string; days: number; reason?: string; employeeId?: string }>({
+      async queryFn(body) {
+        return runQuery(() => apiRequest('/app/leave_encashments', { method: 'POST', body }))
+      },
+      invalidatesTags: ['Leaves'],
+    }),
+    decideLeaveEncashment: builder.mutation<LeaveEncashment, { id: string; status: 'Approved' | 'Rejected' }>({
+      async queryFn({ id, status }) {
+        return runQuery(() => apiRequest(`/app/leave_encashments/${id}`, { method: 'PATCH', body: { status } }))
+      },
+      invalidatesTags: ['Leaves', 'Notifications'],
+    }),
+    cancelLeaveEncashment: builder.mutation<LeaveEncashment, string>({
+      async queryFn(id) {
+        return runQuery(() => apiRequest(`/app/leave_encashments/${id}/cancel`, { method: 'POST' }))
+      },
+      invalidatesTags: ['Leaves'],
     }),
     updateLeaveStatus: builder.mutation<LeaveRequest, { id: string; status: 'Approved' | 'Rejected' }>({
       async queryFn({ id, status }) {

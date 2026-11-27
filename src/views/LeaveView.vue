@@ -18,6 +18,8 @@ import {
   Plus,
   Pencil,
   Trash2,
+  Wallet,
+  Paperclip,
 } from '@lucide/vue'
 import { hrmsApi } from '@/redux/api/hrmsApi'
 import { useApiQuery, useApiMutation, useAppSelector } from '@/redux/vueAdapter'
@@ -25,6 +27,8 @@ import type { LeaveRequest, Employee, LeaveTypePolicy, Holiday, LeaveBalance, Gr
 import FormInput from '@/components/forms/FormInput.vue'
 import FormSelect from '@/components/forms/FormSelect.vue'
 import FormTextarea from '@/components/forms/FormTextarea.vue'
+import LeaveEncashments from '@/components/leave/LeaveEncashments.vue'
+import { apiBlob, type ApiError } from '@/services/apiClient'
 import { usePermissions } from '@/composables/usePermissions'
 
 const currentUser = useAppSelector((state) => state.auth.user)
@@ -71,7 +75,7 @@ const [updateHoliday] = useApiMutation(hrmsApi.endpoints.updateHoliday)
 const [deleteHoliday] = useApiMutation(hrmsApi.endpoints.deleteHoliday)
 
 // Tab & Filter State
-type LeaveTab = 'requests' | 'policies' | 'holidays'
+type LeaveTab = 'requests' | 'policies' | 'holidays' | 'encashment'
 const activeTab = ref<LeaveTab>('requests')
 const activeFilter = ref<'All' | 'Pending' | 'Approved' | 'Rejected'>('All')
 const isModalOpen = ref(false)
@@ -135,6 +139,8 @@ const openRequestLeaveModal = () => {
       reason: '',
     },
   })
+  leaveDocument.value = null
+  leaveDocumentError.value = ''
   isModalOpen.value = true
 }
 
@@ -159,6 +165,7 @@ const onSubmit = handleSubmit(async (values) => {
     endDate: values.endDate,
     daysCount: days,
     reason: values.reason,
+    document: leaveDocument.value,
   })
   if (error) {
     showNotification(error?.data || 'The leave request could not be submitted')
@@ -166,6 +173,7 @@ const onSubmit = handleSubmit(async (values) => {
   }
 
   showNotification('Leave request submitted successfully for approval!')
+  leaveDocument.value = null
   resetForm()
   isModalOpen.value = false
 })
@@ -216,7 +224,48 @@ const policyForm = ref({
   description: '',
   // gradeId -> days per year ('' = use the default above)
   gradeQuotas: {} as Record<string, number | ''>,
+  requiresDocument: false,
+  documentAfterDays: 0,
+  encashable: false,
+  maxEncashDays: '' as number | '',
 })
+const policyRulesPayload = () => ({
+  requiresDocument: policyForm.value.requiresDocument,
+  documentAfterDays: Number(policyForm.value.documentAfterDays) || 0,
+  encashable: policyForm.value.encashable,
+  maxEncashDays: policyForm.value.maxEncashDays === '' ? null : Number(policyForm.value.maxEncashDays),
+})
+
+// Supporting document for the leave being applied (e.g. a medical certificate).
+const leaveDocument = ref<File | null>(null)
+const leaveDocumentError = ref('')
+const onLeaveDocument = (event: Event) => {
+  const file = (event.target as HTMLInputElement).files?.[0] || null
+  leaveDocumentError.value = ''
+  if (file && !['application/pdf', 'image/jpeg', 'image/png'].includes(file.type)) {
+    leaveDocumentError.value = 'Only PDF, JPG or PNG files are allowed'
+    leaveDocument.value = null
+    return
+  }
+  if (file && file.size > 10 * 1048576) {
+    leaveDocumentError.value = 'The file must be smaller than 10 MB'
+    leaveDocument.value = null
+    return
+  }
+  leaveDocument.value = file
+}
+const openLeaveDocument = async (id: string) => {
+  const tab = window.open('', '_blank')
+  try {
+    const blob = await apiBlob(`/app/leave_requests/${id}/document`)
+    const url = URL.createObjectURL(blob)
+    if (tab) tab.location.href = url
+    else window.location.href = url
+  } catch (err) {
+    tab?.close()
+    showNotification((err as ApiError).data || 'Could not open the document')
+  }
+}
 const gradeQuotaPayload = () =>
   Object.entries(policyForm.value.gradeQuotas)
     .filter(([, quota]) => quota !== '' && quota !== null && quota !== undefined)
@@ -234,6 +283,10 @@ const openAddPolicyModal = () => {
     paid: true,
     description: '',
     gradeQuotas: {},
+    requiresDocument: false,
+    documentAfterDays: 0,
+    encashable: false,
+    maxEncashDays: '',
   }
   isPolicyModalOpen.value = true
 }
@@ -250,6 +303,10 @@ const openEditPolicyModal = (p: LeaveTypePolicy) => {
     paid: p.paid ?? (p.name !== 'Unpaid'),
     description: p.description || '',
     gradeQuotas: Object.fromEntries((p.gradeQuotas || []).map((q) => [q.gradeId, q.quota])),
+    requiresDocument: !!p.requiresDocument,
+    documentAfterDays: p.documentAfterDays || 0,
+    encashable: !!p.encashable,
+    maxEncashDays: p.maxEncashDays ?? '',
   }
   isPolicyModalOpen.value = true
 }
@@ -273,6 +330,7 @@ const handleSavePolicy = async () => {
         carryForwardAllowed: Number(policyForm.value.maxCarryForwardDays) > 0,
         description: policyForm.value.description.trim(),
         gradeQuotas: gradeQuotaPayload(),
+        ...policyRulesPayload(),
       },
     })
     showNotification(`Leave policy "${policyForm.value.name}" updated successfully!`)
@@ -286,6 +344,7 @@ const handleSavePolicy = async () => {
       carryForwardAllowed: Number(policyForm.value.maxCarryForwardDays) > 0,
       description: policyForm.value.description.trim(),
       gradeQuotas: gradeQuotaPayload(),
+      ...policyRulesPayload(),
     })
     showNotification(`Leave policy "${policyForm.value.name}" added successfully!`)
   }
@@ -490,7 +549,22 @@ const handleDeleteHoliday = async (h: Holiday) => {
         <Calendar class="w-4 h-4" />
         <span>Holiday Calendar ({{ holidays?.length || 0 }})</span>
       </button>
+
+      <button
+        @click="activeTab = 'encashment'"
+        :class="[
+          'px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer',
+          activeTab === 'encashment'
+            ? 'bg-[#1989d9] text-white shadow-sm shadow-[#1989d9]/30'
+            : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800'
+        ]"
+      >
+        <Wallet class="w-4 h-4" />
+        <span>Encashment</span>
+      </button>
     </div>
+
+    <LeaveEncashments v-if="activeTab === 'encashment'" />
 
     <!-- TAB 1: LEAVE APPLICATIONS -->
     <div v-if="activeTab === 'requests'" class="space-y-4">
@@ -552,8 +626,11 @@ const handleDeleteHoliday = async (h: Holiday) => {
                 <td class="py-4 px-6 text-xs font-bold text-slate-800 dark:text-slate-200 font-mono">
                   {{ leave.daysCount }} days
                 </td>
-                <td class="py-4 px-6 text-xs text-slate-600 dark:text-slate-300 max-w-xs truncate">
-                  {{ leave.reason }}
+                <td class="py-4 px-6 text-xs text-slate-600 dark:text-slate-300 max-w-xs">
+                  <p class="truncate">{{ leave.reason }}</p>
+                  <button v-if="leave.hasDocument" type="button" class="mt-1 inline-flex items-center gap-1 text-[11px] font-semibold text-[#1989d9] hover:underline cursor-pointer" @click="openLeaveDocument(leave.id)">
+                    <Paperclip class="w-3 h-3" /> View document
+                  </button>
                 </td>
                 <td class="py-4 px-6">
                   <span
@@ -814,6 +891,14 @@ const handleDeleteHoliday = async (h: Holiday) => {
             required
           />
 
+          <div>
+            <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5" for="leaveDocument">
+              Supporting document <span class="font-normal text-slate-400">(PDF/JPG/PNG — needed for some leave types, e.g. long sick leave)</span>
+            </label>
+            <input id="leaveDocument" type="file" accept="application/pdf,image/jpeg,image/png" class="block w-full text-xs text-slate-600 dark:text-slate-300 file:mr-3 file:px-3 file:py-2 file:rounded-xl file:border-0 file:bg-slate-100 dark:file:bg-slate-800 file:text-xs file:font-semibold" @change="onLeaveDocument" />
+            <p v-if="leaveDocumentError" class="mt-1 text-[11px] font-semibold text-rose-600">{{ leaveDocumentError }}</p>
+          </div>
+
           <div class="flex items-center justify-end gap-3 pt-4 border-t border-slate-100 dark:border-slate-800">
             <button
               type="button"
@@ -943,6 +1028,29 @@ const handleDeleteHoliday = async (h: Holiday) => {
                 <option :value="true">Paid Leave</option>
                 <option :value="false">Unpaid Leave</option>
               </select>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div class="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-2">
+              <label class="flex items-center gap-2 text-xs font-semibold text-slate-700 dark:text-slate-200">
+                <input v-model="policyForm.requiresDocument" type="checkbox" class="rounded" /> Needs supporting document
+              </label>
+              <label v-if="policyForm.requiresDocument" class="flex items-center gap-2 text-[11px] text-slate-500">
+                For leave longer than
+                <input v-model="policyForm.documentAfterDays" type="number" min="0" step="0.5" aria-label="Document after days" class="w-16 px-2 py-1 text-xs text-right bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg" />
+                day(s)
+              </label>
+            </div>
+            <div class="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-2">
+              <label class="flex items-center gap-2 text-xs font-semibold text-slate-700 dark:text-slate-200">
+                <input v-model="policyForm.encashable" type="checkbox" class="rounded" /> Can be encashed
+              </label>
+              <label v-if="policyForm.encashable" class="flex items-center gap-2 text-[11px] text-slate-500">
+                Max per year
+                <input v-model="policyForm.maxEncashDays" type="number" min="0.5" step="0.5" placeholder="No limit" aria-label="Max encash days" class="w-20 px-2 py-1 text-xs text-right bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg" />
+                day(s)
+              </label>
             </div>
           </div>
 
