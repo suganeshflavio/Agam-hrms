@@ -322,7 +322,7 @@ export interface AttendanceRecord {
 }
 
 export type AttendanceDayStatus =
-  | 'present' | 'late' | 'half_day' | 'absent' | 'wfh' | 'on_leave' | 'holiday' | 'weekly_off' | 'not_marked' | 'upcoming'
+  | 'present' | 'late' | 'half_day' | 'absent' | 'wfh' | 'on_duty' | 'on_leave' | 'holiday' | 'weekly_off' | 'not_marked' | 'upcoming'
 
 export interface AttendanceRegisterRow {
   employeeId: string
@@ -585,6 +585,9 @@ export interface RemoteWorkRequest {
   fromDate: string
   toDate: string
   days: number
+  /** WFH or On Duty (official work away from the office). */
+  kind?: 'WFH' | 'On Duty'
+  dutyLocation?: string
   reason: string
   status: 'Pending' | 'Approved' | 'Rejected' | 'Cancelled'
   appliedOn: string
@@ -686,4 +689,12 @@ export interface TodoInput {
   status?: TodoStatus
   assigneeId?: string
   projectId?: string
+}
+
+/** Generic report from GET /app/reports/:name (also downloadable as CSV). */
+export interface ReportResult {
+  title: string
+  columns: { key: string; label: string }[]
+  rows: Record<string, string | number | null>[]
+  totals?: Record<string, string | number | null>
 }

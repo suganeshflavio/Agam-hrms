@@ -22,6 +22,7 @@ import {
   TrendingUp,
   X,
   XCircle,
+  Briefcase,
 } from '@lucide/vue'
 import { hrmsApi } from '@/redux/api/hrmsApi'
 import { useApiMutation, useApiQuery } from '@/redux/vueAdapter'
@@ -90,6 +91,7 @@ const LOOK: Record<AttendanceDayStatus, StatusLook> = {
   half_day: { cell: 'bg-teal-50/70 dark:bg-teal-950/25', chip: 'bg-teal-500', text: '½' },
   absent: { cell: 'bg-rose-50/80 dark:bg-rose-950/25', chip: 'bg-rose-500', icon: X },
   wfh: { cell: 'bg-sky-50/80 dark:bg-sky-950/25', chip: 'bg-sky-500', icon: Home },
+  on_duty: { cell: 'bg-teal-50/80 dark:bg-teal-950/25', chip: 'bg-teal-600', icon: Briefcase },
   on_leave: { cell: 'bg-violet-50/80 dark:bg-violet-950/25', chip: 'bg-violet-500', icon: Plane },
   holiday: { cell: 'bg-cyan-50/70 dark:bg-cyan-950/25', chip: 'bg-cyan-500', icon: PartyPopper },
   weekly_off: { cell: 'bg-slate-50 dark:bg-slate-800/40' },
@@ -102,6 +104,7 @@ const legend: { label: string; status: AttendanceDayStatus }[] = [
   { label: 'Late', status: 'late' },
   { label: 'Half day', status: 'half_day' },
   { label: 'Work from home', status: 'wfh' },
+  { label: 'On duty', status: 'on_duty' },
   { label: 'On leave', status: 'on_leave' },
   { label: 'Missed', status: 'absent' },
   { label: 'Holiday', status: 'holiday' },
@@ -113,7 +116,7 @@ const summary = computed(() => {
   const s = calendar.value?.summary || {}
   const marked = (s.present || 0) + (s.late || 0) + (s.half_day || 0)
   const missed = s.absent || 0
-  const wfh = s.wfh || 0
+  const wfh = (s.wfh || 0) + (s.on_duty || 0)
   const working = marked + wfh + missed
   return {
     marked,
@@ -135,7 +138,7 @@ const stats = computed(() => [
     iconCls: 'bg-white/80 text-[#1989d9] dark:bg-slate-900/60',
   },
   {
-    label: 'Work from home', value: summary.value.wfh, icon: Home, badge: '',
+    label: 'WFH / On duty', value: summary.value.wfh, icon: Home, badge: '',
     card: 'from-cyan-50 to-sky-100/60 dark:from-cyan-950/40 dark:to-sky-950/30 border-cyan-100 dark:border-cyan-900/50',
     iconCls: 'bg-white/80 text-sky-600 dark:bg-slate-900/60',
   },
@@ -389,6 +392,7 @@ const regularizeSelected = () => {
                     <template v-if="cell.checkIn">{{ cell.checkIn }}<template v-if="cell.checkOut"> – {{ cell.checkOut }}</template></template>
                     <template v-else-if="cell.leaveType">{{ cell.leaveType }}</template>
                     <template v-else-if="cell.status === 'wfh'">Work from home</template>
+                    <template v-else-if="cell.status === 'on_duty'">On duty</template>
                     <template v-else-if="cell.status === 'holiday'">Holiday</template>
                     <template v-else-if="cell.status === 'not_marked'">Not marked yet</template>
                   </span>

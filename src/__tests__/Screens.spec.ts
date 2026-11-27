@@ -255,7 +255,7 @@ describe('Screens backed by the API', () => {
     await form.trigger('submit')
     await settle()
 
-    expect(postBody(fetchMock, '/app/remote_work')).toEqual({ fromDate: '2026-11-23', toDate: '2026-11-24', reason: 'Internet installation' })
+    expect(postBody(fetchMock, '/app/remote_work')).toEqual({ fromDate: '2026-11-23', toDate: '2026-11-24', reason: 'Internet installation', kind: 'wfh' })
     expect(wrapper.text()).toContain('shows as WFH in your attendance calendar once approved')
   })
 
@@ -547,5 +547,20 @@ describe('Screens backed by the API', () => {
     await settle()
     expect(postBody(fetchMock, '/app/employees/7/probation')).toMatchObject({ outcome: 'confirm' })
     expect(wrapper.text()).toContain('Priya Raman is now confirmed')
+  })
+  it('shows an attendance report on the Reports page', async () => {
+    stubBackend({
+      'GET /app/reports/attendance_summary': {
+        title: 'Attendance summary Nov 2026',
+        columns: [{ key: 'employeeName', label: 'Employee' }, { key: 'onDutyDays', label: 'On duty' }, { key: 'lateDays', label: 'Late days' }],
+        rows: [{ employeeName: 'Asha Iyer', onDutyDays: 2, lateDays: 1 }],
+      },
+    })
+    signIn(makeUser('Super Admin'))
+    wrapper = await mountAt('/reports')
+    expect(wrapper.find('[data-report="missing_punches"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('Attendance summary Nov 2026')
+    expect(wrapper.text()).toContain('Asha Iyer')
+    expect(wrapper.text()).toContain('On duty')
   })
 })

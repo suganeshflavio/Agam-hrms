@@ -32,6 +32,7 @@ import type {
   LeaveBalance,
   Payslip,
   HRMSDashboardStats,
+  ReportResult,
 } from '@/types/hrms'
 
 export const hrmsApi = createApi({
@@ -275,6 +276,12 @@ export const hrmsApi = createApi({
       },
       invalidatesTags: ['Employees'],
     }),
+    getReport: builder.query<ReportResult, { name: string; params?: Record<string, string> }>({
+      async queryFn({ name, params }) {
+        return runQuery(() => apiRequest(`/app/reports/${name}`, { query: params }))
+      },
+      providesTags: ['Attendance', 'Leaves', 'Payroll', 'Employees', 'Projects'],
+    }),
     getProbation: builder.query<ProbationRecord[], void>({
       async queryFn() {
         return runQuery(() => apiRequest('/app/probation'))
@@ -495,7 +502,7 @@ export const hrmsApi = createApi({
     }),
 
     // Work-from-home applications (approved days show as WFH in attendance)
-    applyWfh: builder.mutation<RemoteWorkRequest, { fromDate: string; toDate: string; reason: string }>({
+    applyWfh: builder.mutation<RemoteWorkRequest, { fromDate: string; toDate: string; reason: string; kind?: 'wfh' | 'on_duty'; dutyLocation?: string }>({
       async queryFn(body) {
         return runQuery(() => apiRequest('/app/remote_work', { method: 'POST', body }))
       },

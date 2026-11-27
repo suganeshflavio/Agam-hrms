@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { CheckCircle2, Home, Inbox, Plus, X, XCircle } from '@lucide/vue'
+import { Briefcase, CheckCircle2, Home, Inbox, MapPin, Plus, X, XCircle } from '@lucide/vue'
 import { hrmsApi } from '@/redux/api/hrmsApi'
 import { useApiMutation, useApiQuery } from '@/redux/vueAdapter'
 import { usePermissions } from '@/composables/usePermissions'
@@ -58,11 +58,11 @@ const shift = (days: number) => {
 }
 const todayIso = iso(new Date())
 const showForm = ref(false)
-const form = ref({ fromDate: todayIso, toDate: todayIso, reason: '' })
+const form = ref({ fromDate: todayIso, toDate: todayIso, reason: '', kind: 'wfh' as 'wfh' | 'on_duty', dutyLocation: '' })
 const formError = ref('')
 const message = ref('')
 const openForm = () => {
-  form.value = { fromDate: todayIso, toDate: todayIso, reason: '' }
+  form.value = { fromDate: todayIso, toDate: todayIso, reason: '', kind: 'wfh', dutyLocation: '' }
   formError.value = ''
   showForm.value = true
 }
@@ -81,11 +81,18 @@ const submitForm = async () => {
   const f = form.value
   if (!f.fromDate) return (formError.value = 'Choose the start date')
   if (f.toDate && f.toDate < f.fromDate) return (formError.value = 'The end date must be on or after the start date')
+  if (f.kind === 'on_duty' && !f.dutyLocation.trim()) return (formError.value = 'Enter where you will be on duty')
   if (f.reason.trim().length < 5) return (formError.value = 'Please give a reason (at least 5 characters)')
-  const { error: err } = await apply({ fromDate: f.fromDate, toDate: f.toDate || f.fromDate, reason: f.reason.trim() })
-  if (err) return (formError.value = (err as ApiError).data || 'Could not apply for work from home')
+  const onDuty = f.kind === 'on_duty'
+  const { error: err } = await apply({
+    fromDate: f.fromDate, toDate: f.toDate || f.fromDate, reason: f.reason.trim(), kind: f.kind,
+    ...(onDuty ? { dutyLocation: f.dutyLocation.trim() } : {}),
+  })
+  if (err) return (formError.value = (err as ApiError).data || 'Could not send the application')
   showForm.value = false
-  message.value = 'Work from home applied. It shows as WFH in your attendance calendar once approved.'
+  message.value = onDuty
+    ? 'On duty applied. It shows as On duty in your attendance calendar once approved.'
+    : 'Work from home applied. It shows as WFH in your attendance calendar once approved.'
 }
 
 // ---- approve / reject / cancel
@@ -123,10 +130,10 @@ const inputCls =
           <Home class="w-5 h-5" />
         </div>
         <div class="min-w-0">
-          <h2 class="text-base font-bold text-slate-900 dark:text-white">Work From Home</h2>
+          <h2 class="text-base font-bold text-slate-900 dark:text-white">Work From Home & On Duty</h2>
           <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
             <template v-if="waitingOnMe">{{ waitingOnMe }} waiting for your approval · </template>
-            Approved days show as WFH in the attendance calendar
+            Approved days show as WFH / On duty in the attendance calendar
           </p>
         </div>
       </div>
@@ -146,7 +153,7 @@ const inputCls =
           class="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap shrink-0 bg-[#1989d9] text-white hover:bg-[#1478c0] shadow-sm shadow-[#1989d9]/30 cursor-pointer"
           @click="openForm"
         >
-          <Plus class="w-4 h-4" /> Apply Work From Home
+          <Plus class="w-4 h-4" /> Apply Work From Home / On Duty
         </button>
       </div>
     </div>
@@ -157,7 +164,7 @@ const inputCls =
     <div v-else-if="isLoading && !requests" class="p-10 text-center text-sm text-slate-400">Loading…</div>
     <div v-else-if="!list.length" class="p-10 flex flex-col items-center gap-2 text-center text-sm text-slate-400">
       <Inbox class="w-8 h-8" />
-      {{ filter === 'Pending' ? 'No applications waiting for approval.' : 'No work-from-home applications yet.' }}
+      {{ filter === 'Pending' ? 'No applications waiting for approval.' : 'No work-from-home or on-duty applications yet.' }}
     </div>
 
     <ul v-else class="divide-y divide-slate-100 dark:divide-slate-800">
@@ -168,9 +175,13 @@ const inputCls =
         </div>
         <div class="flex-1 min-w-0 space-y-1">
           <p class="flex flex-wrap items-center gap-2 text-xs">
-            <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-bold bg-sky-50 text-sky-700 dark:bg-sky-950/50 dark:text-sky-300">
+            <span v-if="r.kind === 'On Duty'" class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-bold bg-teal-50 text-teal-700 dark:bg-teal-950/50 dark:text-teal-300">
+              <Briefcase class="w-3 h-3" /> On Duty
+            </span>
+            <span v-else class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-bold bg-sky-50 text-sky-700 dark:bg-sky-950/50 dark:text-sky-300">
               <Home class="w-3 h-3" /> WFH
             </span>
+            <span v-if="r.dutyLocation" class="inline-flex items-center gap-1 text-slate-500"><MapPin class="w-3 h-3" />{{ r.dutyLocation }}</span>
             <span class="font-semibold text-slate-800 dark:text-slate-100">{{ range(r) }}</span>
             <span class="text-slate-500">· {{ r.days }} working day(s)</span>
           </p>
@@ -209,13 +220,28 @@ const inputCls =
       <form class="w-full sm:max-w-md bg-white dark:bg-slate-900 rounded-t-3xl sm:rounded-3xl p-6 space-y-4 max-h-[92vh] overflow-y-auto" @submit.prevent="submitForm">
         <div class="flex items-start justify-between gap-4">
           <div>
-            <h3 class="text-lg font-bold text-slate-900 dark:text-white">Apply Work From Home</h3>
-            <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Goes to your approver. Approved days show as WFH — no clock-in needed.</p>
+            <h3 class="text-lg font-bold text-slate-900 dark:text-white">{{ form.kind === 'on_duty' ? 'Apply On Duty' : 'Apply Work From Home' }}</h3>
+            <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Goes to your approver. Approved days count as attended — no clock-in needed.</p>
           </div>
           <button type="button" class="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer" @click="showForm = false">
             <X class="w-5 h-5" />
           </button>
         </div>
+        <div class="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Type">
+          <button
+            v-for="k in ([{ value: 'wfh', label: 'Work from home' }, { value: 'on_duty', label: 'On duty (client / travel)' }] as const)" :key="k.value"
+            type="button" role="radio" :aria-checked="form.kind === k.value"
+            class="px-3 py-2 rounded-xl border text-xs font-bold cursor-pointer"
+            :class="form.kind === k.value ? 'bg-[#1989d9] border-[#1989d9] text-white' : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'"
+            @click="form.kind = k.value"
+          >
+            {{ k.label }}
+          </button>
+        </div>
+        <label v-if="form.kind === 'on_duty'" class="block text-xs font-semibold text-slate-600 dark:text-slate-300">
+          Where
+          <input v-model="form.dutyLocation" maxlength="200" :class="inputCls" placeholder="e.g. Client office, Chennai" />
+        </label>
         <div class="grid grid-cols-2 gap-3">
           <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300">
             From

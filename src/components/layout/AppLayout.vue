@@ -20,6 +20,7 @@ import {
   PanelLeftOpen,
   Sparkles,
   BadgeCheck,
+  BarChart3,
 } from '@lucide/vue'
 import ThemeToggle from '@/components/common/ThemeToggle.vue'
 import NotificationBell from '@/components/layout/NotificationBell.vue'
@@ -73,6 +74,7 @@ const navSections = computed(() => {
         { name: 'Leave Management', path: '/leaves', icon: CalendarCheck, permission: 'leaves', selfService: true },
         { name: 'Payroll & Tax', path: '/payroll', icon: Banknote, permission: 'payroll' },
         { name: 'Employee Self-Service', path: '/self-service', icon: UserCheck, selfService: true },
+        { name: 'Reports', path: '/reports', icon: BarChart3, permission: 'attendance', team: true },
       ].filter((item) => (item.selfService && hasEmployeeProfile) || ('team' in item && authUser.value?.managesTeam) || (item.permission ? can(item.permission) : false)),
     },
     {
