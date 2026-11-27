@@ -71,7 +71,7 @@ const baseGroups = (): { label: string; people: Person[] }[] => {
     scope.value === 'own'
       ? []
       : (employees.value || [])
-          .filter((e) => e.status !== 'Terminated' && e.id !== myId.value && !teammateIds.has(e.id))
+          .filter((e) => e.isCurrent !== false && e.id !== myId.value && !teammateIds.has(e.id))
           .map((e) => ({ id: e.id, name: `${e.firstName} ${e.lastName}` }))
   return [
     { label: '', people: myId.value ? [{ id: myId.value, name: meLabel(myName.value) }] : [] },

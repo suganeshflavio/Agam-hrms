@@ -30,11 +30,15 @@ import {
   ExternalLink,
   Landmark,
   Eye,
+  Camera,
+  Trash2,
 } from '@lucide/vue'
 import { hrmsApi } from '@/redux/api/hrmsApi'
 import { useApiQuery, useApiMutation, useAppDispatch } from '@/redux/vueAdapter'
 import { apiBlob, apiRequest, type ApiError } from '@/services/apiClient'
 import AddEmployeeWizard from '@/components/employees/AddEmployeeWizard.vue'
+import EmployeeBackground from '@/components/employees/EmployeeBackground.vue'
+import EmployeeAvatar from '@/components/common/EmployeeAvatar.vue'
 import type { Employee, Department, Designation, Grade, EmployeeDocument, Payslip, CompanyInfo } from '@/types/hrms'
 import { useMoney } from '@/composables/useMoney'
 import { usePermissions } from '@/composables/usePermissions'
@@ -83,7 +87,29 @@ const showFeedback = (msg: string, type: 'success' | 'error' = 'success') => {
 // Login account (temporary password emailed by the backend)
 const dispatch = useAppDispatch()
 // Access follows HR Administration -> Roles & Permissions.
-const { can } = usePermissions()
+const { can, user } = usePermissions()
+const isSelf = computed(() => !!employee.value && user.value?.employeeId === employee.value.id)
+const canEditBackground = computed(() => can('employees', 'edit') || isSelf.value)
+
+// Profile photo: the employee themself or HR.
+const [uploadEmployeePhoto, { isLoading: isPhotoUploading }] = useApiMutation(hrmsApi.endpoints.uploadEmployeePhoto)
+const [removeEmployeePhoto] = useApiMutation(hrmsApi.endpoints.removeEmployeePhoto)
+const photoInput = ref<HTMLInputElement | null>(null)
+const onPhotoChosen = async (event: Event) => {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file || !employee.value) return
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) return showFeedback('Choose a JPG, PNG or WebP image', 'error')
+  if (file.size > 2 * 1048576) return showFeedback('The photo must be smaller than 2 MB', 'error')
+  const { error } = await uploadEmployeePhoto({ employeeId: employee.value.id, file })
+  showFeedback(error ? (error as ApiError).data || 'Could not upload the photo' : 'Photo updated', error ? 'error' : 'success')
+}
+const removePhoto = async () => {
+  if (!employee.value || !confirm('Remove the profile photo?')) return
+  const { error } = await removeEmployeePhoto(employee.value.id)
+  showFeedback(error ? (error as ApiError).data || 'Could not remove the photo' : 'Photo removed', error ? 'error' : 'success')
+}
 const canManageAccounts = computed(() => can('admin', 'create'))
 const canEditEmployee = computed(() => can('employees', 'edit'))
 // Edit details: the onboarding wizard, pre-filled with this employee.
@@ -270,6 +296,13 @@ const addressLines = computed(() => {
   return [line, rest].filter(Boolean) as string[]
 })
 
+const permanentLines = computed(() => {
+  const d = employee.value?.permanentAddress
+  if (!d) return []
+  const rest = [d.city, [d.state, d.postalCode].filter(Boolean).join(' '), d.country].filter(Boolean).join(', ')
+  return [d.line, rest].filter(Boolean) as string[]
+})
+
 const emergencyContactInfo = computed(() => {
   const contact = employee.value?.emergencyContact
   if (!contact) {
@@ -392,8 +425,28 @@ const probationLabel = computed(() => {
         <div class="flex flex-col md:flex-row md:items-center justify-between gap-6 relative">
           <!-- Profile Left Details -->
           <div class="flex items-start md:items-center gap-5">
-            <div class="w-20 h-20 rounded-2xl bg-gradient-to-tr from-indigo-600 to-purple-600 text-white flex items-center justify-center font-bold text-2xl shadow-xl shadow-indigo-500/20 shrink-0">
-              {{ (employee.firstName || '').charAt(0) }}{{ (employee.lastName || '').charAt(0) }}
+            <div class="relative shrink-0 group" data-photo>
+              <EmployeeAvatar
+                :url="employee.avatarUrl" :name="`${employee.firstName} ${employee.lastName}`"
+                size="w-20 h-20 text-2xl" rounded="rounded-2xl shadow-xl shadow-indigo-500/20"
+              />
+              <template v-if="canEditBackground">
+                <input ref="photoInput" type="file" accept="image/jpeg,image/png,image/webp" class="hidden" @change="onPhotoChosen" />
+                <button
+                  type="button" :disabled="isPhotoUploading" :title="employee.avatarUrl ? 'Change photo' : 'Add photo'"
+                  class="absolute -bottom-1.5 -right-1.5 p-1.5 rounded-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-200 shadow cursor-pointer disabled:opacity-50"
+                  @click="photoInput?.click()"
+                >
+                  <Camera class="w-3.5 h-3.5" />
+                </button>
+                <button
+                  v-if="employee.avatarUrl" type="button" title="Remove photo"
+                  class="absolute -top-1.5 -right-1.5 p-1 rounded-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-rose-500 shadow opacity-0 group-hover:opacity-100 focus:opacity-100 cursor-pointer"
+                  @click="removePhoto"
+                >
+                  <Trash2 class="w-3 h-3" />
+                </button>
+              </template>
             </div>
             <div>
               <div class="flex flex-wrap items-center gap-2.5">
@@ -406,9 +459,9 @@ const probationLabel = computed(() => {
                 <span
                   :class="[
                     'px-2.5 py-0.5 rounded-full text-[11px] font-bold',
-                    employee.status === 'Active'
+                    ['Active', 'Confirmed'].includes(employee.status)
                       ? 'bg-emerald-50 dark:bg-emerald-950/50 text-emerald-600 dark:text-emerald-400'
-                      : employee.status === 'On Leave'
+                      : ['On Leave', 'Probation', 'Notice Period', 'Offer Released', 'Pre-Joining'].includes(employee.status)
                       ? 'bg-amber-50 dark:bg-amber-950/50 text-amber-600 dark:text-amber-400'
                       : 'bg-rose-50 dark:bg-rose-950/50 text-rose-600 dark:text-rose-400'
                   ]"
@@ -651,6 +704,19 @@ const probationLabel = computed(() => {
             <p v-else class="text-slate-400">No address on file</p>
           </div>
         </div>
+
+        <div class="pt-6 border-t border-slate-100 dark:border-slate-800">
+          <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4">Permanent Address</h3>
+          <div class="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/60 dark:border-slate-800 text-xs text-slate-600 dark:text-slate-300 space-y-1">
+            <template v-if="permanentLines.length">
+              <p class="font-bold text-slate-800 dark:text-slate-100 text-sm">{{ permanentLines[0] }}</p>
+              <p v-if="permanentLines[1]">{{ permanentLines[1] }}</p>
+            </template>
+            <p v-else class="text-slate-400">Same as residential address</p>
+          </div>
+        </div>
+
+        <EmployeeBackground :employee="employee" :can-edit="canEditBackground" @saved="(m) => showFeedback(m)" />
       </div>
 
       <!-- Tab Content 3: Employment Details -->
@@ -688,6 +754,22 @@ const probationLabel = computed(() => {
           <div class="space-y-1">
             <span class="text-slate-400 font-medium">Official Joining Date</span>
             <p class="font-bold text-slate-800 dark:text-slate-200 text-sm">{{ employee.joiningDate }}</p>
+          </div>
+          <div v-if="employee.probationEndDate" class="space-y-1">
+            <span class="text-slate-400 font-medium">Probation End Date</span>
+            <p class="font-bold text-slate-800 dark:text-slate-200 text-sm">{{ formatDate(employee.probationEndDate) }}</p>
+          </div>
+          <div v-if="employee.confirmationDate" class="space-y-1">
+            <span class="text-slate-400 font-medium">Confirmation Date</span>
+            <p class="font-bold text-emerald-600 text-sm">{{ formatDate(employee.confirmationDate) }}</p>
+          </div>
+          <div class="space-y-1">
+            <span class="text-slate-400 font-medium">Notice Period</span>
+            <p class="font-bold text-slate-800 dark:text-slate-200 text-sm">{{ employee.noticePeriodDays != null ? `${employee.noticePeriodDays} days` : 'Company default' }}</p>
+          </div>
+          <div v-if="employee.leavingDate" class="space-y-1">
+            <span class="text-slate-400 font-medium">Last Working Day</span>
+            <p class="font-bold text-rose-600 text-sm">{{ formatDate(employee.leavingDate) }}</p>
           </div>
           <div class="space-y-1">
             <span class="text-slate-400 font-medium">Reporting Manager</span>

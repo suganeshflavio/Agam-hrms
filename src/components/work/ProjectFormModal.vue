@@ -27,7 +27,7 @@ const members = ref<{ employeeId: string; role: string }[]>([])
 const error = ref('')
 
 const people = computed(() =>
-  (employees.value || []).filter((e) => e.status !== 'Terminated').map((e) => ({ id: e.id, name: `${e.firstName} ${e.lastName}`, designation: e.designation })),
+  (employees.value || []).filter((e) => e.isCurrent !== false).map((e) => ({ id: e.id, name: `${e.firstName} ${e.lastName}`, designation: e.designation })),
 )
 const addRow = () => members.value.push({ employeeId: '', role: '' })
 

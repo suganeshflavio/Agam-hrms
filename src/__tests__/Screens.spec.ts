@@ -528,4 +528,24 @@ describe('Screens backed by the API', () => {
     expect(wrapper.text()).not.toContain('Add Leave Policy')
     expect(wrapper.text()).not.toContain('Add Holiday')
   })
+  it('lists probation employees and lets HR confirm one', async () => {
+    const record = {
+      employeeId: '7', employeeName: 'Priya Raman', employeeCode: 'AGM-007', department: 'Engineering', designation: 'Developer',
+      joiningDate: '2026-06-01', probationEndDate: '2026-12-01', daysLeft: 4, reportingManagerName: 'Ravi Kumar',
+      canDecide: true, canReview: true,
+      reviews: [{ id: '1', outcome: 'Feedback', reviewerName: 'Ravi Kumar', rating: 4, recommendation: 'Confirm', feedback: 'Great start', createdAt: '2026-11-20T10:00:00Z' }],
+    }
+    const fetchMock = stubBackend({ 'GET /app/probation': [record], 'POST /app/employees/7/probation': { ...record, reviews: [] } })
+    signIn(makeUser('Super Admin'))
+    wrapper = await mountAt('/probation')
+    expect(wrapper.text()).toContain('Priya Raman')
+    expect(wrapper.text()).toContain('4 days left')
+    expect(wrapper.text()).toContain('Recommends: Confirm')
+
+    await wrapper.findAll('button').find((b) => b.text() === 'Confirm')!.trigger('click')
+    await wrapper.find('form[role="dialog"]').trigger('submit')
+    await settle()
+    expect(postBody(fetchMock, '/app/employees/7/probation')).toMatchObject({ outcome: 'confirm' })
+    expect(wrapper.text()).toContain('Priya Raman is now confirmed')
+  })
 })

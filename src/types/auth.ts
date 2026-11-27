@@ -53,6 +53,8 @@ export interface AuthUser {
   companyCode?: string
   /** True after HR creates the account; the user must set their own password. */
   mustChangePassword?: boolean
+  /** Has direct reports or team members. */
+  managesTeam?: boolean
 }
 
 export interface AuthState {

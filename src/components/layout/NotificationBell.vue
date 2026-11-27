@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { Bell, CheckCheck, CheckCircle2, ClipboardCheck, FolderKanban, Hourglass, ListTodo, XCircle } from '@lucide/vue'
+import { BadgeCheck, Bell, CheckCheck, CheckCircle2, ClipboardCheck, Clock, FolderKanban, Hourglass, ListTodo, PartyPopper, XCircle } from '@lucide/vue'
 import { hrmsApi } from '@/redux/api/hrmsApi'
 import { store } from '@/redux/store'
 import { useApiMutation, useApiQuery } from '@/redux/vueAdapter'
@@ -46,6 +46,9 @@ const LOOK: Record<string, { icon: typeof Bell; cls: string }> = {
   approval_approved: { icon: CheckCircle2, cls: 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950/50 dark:text-emerald-300' },
   approval_rejected: { icon: XCircle, cls: 'bg-rose-50 text-rose-600 dark:bg-rose-950/50 dark:text-rose-300' },
   todo: { icon: ListTodo, cls: 'bg-indigo-50 text-indigo-600 dark:bg-indigo-950/50 dark:text-indigo-300' },
+  probation: { icon: BadgeCheck, cls: 'bg-amber-50 text-amber-600 dark:bg-amber-950/50 dark:text-amber-300' },
+  celebration: { icon: PartyPopper, cls: 'bg-pink-50 text-pink-600 dark:bg-pink-950/50 dark:text-pink-300' },
+  attendance: { icon: Clock, cls: 'bg-sky-50 text-sky-600 dark:bg-sky-950/50 dark:text-sky-300' },
   project: { icon: FolderKanban, cls: 'bg-violet-50 text-violet-600 dark:bg-violet-950/50 dark:text-violet-300' },
 }
 const look = (n: AppNotification) => LOOK[n.category] || { icon: Bell, cls: 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-300' }
@@ -64,6 +67,8 @@ const destination = (n: AppNotification): string | null => {
     case 'PayrollRun': return '/payroll'
     case 'Project': return `/projects/${n.record_id}`
     case 'Todo': return '/todos'
+    case 'AttendanceRecord': return '/attendance'
+    case 'Employee': return n.category === 'probation' ? '/probation' : null
   }
   if (n.category === 'todo') return projectId ? `/projects/${projectId}` : '/todos'
   return null

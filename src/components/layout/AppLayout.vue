@@ -19,6 +19,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Sparkles,
+  BadgeCheck,
 } from '@lucide/vue'
 import ThemeToggle from '@/components/common/ThemeToggle.vue'
 import NotificationBell from '@/components/layout/NotificationBell.vue'
@@ -67,11 +68,12 @@ const navSections = computed(() => {
       items: [
         { name: 'HR Administration', path: '/admin', icon: ShieldCheck, permission: 'admin' },
         { name: 'Employee Onboarding', path: '/employees', icon: Users, permission: 'employees' },
+        { name: 'Probation Reviews', path: '/probation', icon: BadgeCheck, permission: 'employees', team: true },
         { name: 'Attendance & Shifts', path: '/attendance', icon: Clock, permission: 'attendance', selfService: true },
         { name: 'Leave Management', path: '/leaves', icon: CalendarCheck, permission: 'leaves', selfService: true },
         { name: 'Payroll & Tax', path: '/payroll', icon: Banknote, permission: 'payroll' },
         { name: 'Employee Self-Service', path: '/self-service', icon: UserCheck, selfService: true },
-      ].filter((item) => (item.selfService && hasEmployeeProfile) || (item.permission ? can(item.permission) : false)),
+      ].filter((item) => (item.selfService && hasEmployeeProfile) || ('team' in item && authUser.value?.managesTeam) || (item.permission ? can(item.permission) : false)),
     },
     {
       title: 'Work',

@@ -109,6 +109,55 @@ export interface TransferPromotionRecord {
   approvedBy: string
 }
 
+export type EmployeeStatus =
+  | 'Active' | 'Confirmed' | 'On Leave' | 'Probation' | 'Notice Period'
+  | 'Offer Released' | 'Pre-Joining'
+  | 'Resigned' | 'Relieved' | 'Terminated' | 'Retired' | 'Inactive'
+
+export interface EducationRecord {
+  degree: string
+  institution?: string
+  fieldOfStudy?: string
+  startYear?: string
+  endYear?: string
+  score?: string
+}
+
+export interface EmploymentRecord {
+  company: string
+  designation?: string
+  fromDate?: string
+  toDate?: string
+  lastCtc?: string
+  reasonForLeaving?: string
+}
+
+export interface ProbationReview {
+  id: string
+  outcome: 'Feedback' | 'Confirmed' | 'Extended'
+  reviewerName: string
+  rating?: number
+  recommendation?: 'Confirm' | 'Extend'
+  feedback?: string
+  newEndDate?: string
+  createdAt: string
+}
+
+export interface ProbationRecord {
+  employeeId: string
+  employeeName: string
+  employeeCode: string
+  department: string
+  designation: string
+  joiningDate: string
+  probationEndDate?: string
+  daysLeft?: number
+  reportingManagerName?: string
+  canDecide: boolean
+  canReview: boolean
+  reviews: ProbationReview[]
+}
+
 export interface Employee {
   id: string
   employeeCode: string
@@ -139,7 +188,7 @@ export interface Employee {
   shift?: string
   approvalWorkflow?: string
   employmentType: 'Full-time' | 'Part-time' | 'Contract' | 'Intern'
-  status: 'Active' | 'On Leave' | 'Terminated' | 'Probation' | 'Notice Period'
+  status: EmployeeStatus
   joiningDate: string
   salary: number
 
@@ -161,6 +210,14 @@ export interface Employee {
   maritalStatus?: string
   addressDetails?: { line?: string; city?: string; state?: string; postalCode?: string; country?: string }
   probationEndDate?: string
+  confirmationDate?: string
+  leavingDate?: string
+  noticePeriodDays?: number
+  permanentAddress?: { line?: string; city?: string; state?: string; postalCode?: string; country?: string }
+  education?: EducationRecord[]
+  previousEmployment?: EmploymentRecord[]
+  /** Currently employed (active, confirmed, probation, notice period). */
+  isCurrent?: boolean
   teamLeadId?: string
   teamLeadName?: string
   panNumber?: string

@@ -89,6 +89,12 @@ const router = createRouter({
       meta: { requiresAuth: true, permission: 'employees' },
     },
     {
+      path: '/probation',
+      name: 'probation',
+      component: () => import('@/views/ProbationView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
       path: '/attendance',
       name: 'attendance',
       component: AttendanceView,

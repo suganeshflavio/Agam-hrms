@@ -66,7 +66,7 @@ const removeProject = async () => {
 const memberForm = ref({ employeeId: '', role: '' })
 const candidates = computed(() => {
   const taken = new Set([project.value?.managerId, ...(project.value?.members || []).map((m) => m.employeeId)])
-  return (employees.value || []).filter((e) => e.status !== 'Terminated' && !taken.has(e.id))
+  return (employees.value || []).filter((e) => e.isCurrent !== false && !taken.has(e.id))
 })
 const addNewMember = async () => {
   if (!project.value || !memberForm.value.employeeId) return

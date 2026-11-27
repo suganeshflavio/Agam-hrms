@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import EmployeeAvatar from '@/components/common/EmployeeAvatar.vue'
 import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import {
@@ -88,7 +89,10 @@ const filteredEmployees = computed(() => {
       selectedDepartment.value === 'All' || emp.department === selectedDepartment.value
 
     const matchesStatus =
-      selectedStatus.value === 'All' || emp.status === selectedStatus.value
+      selectedStatus.value === 'All' ||
+      emp.status === selectedStatus.value ||
+      (selectedStatus.value === 'Current' && emp.isCurrent !== false) ||
+      (selectedStatus.value === 'Separated' && emp.isCurrent === false && !['Offer Released', 'Pre-Joining'].includes(emp.status))
 
     const matchesBranch =
       selectedBranch.value === 'All' || emp.branch === selectedBranch.value
@@ -271,10 +275,19 @@ const exportToCsv = () => {
           class="px-3 py-2 text-xs rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 focus:outline-hidden"
         >
           <option value="All">All Statuses</option>
+          <option value="Current">Current employees</option>
           <option value="Active">Active</option>
+          <option value="Confirmed">Confirmed</option>
           <option value="On Leave">On Leave</option>
           <option value="Probation">Probation</option>
+          <option value="Notice Period">Notice Period</option>
+          <option value="Offer Released">Offer Released</option>
+          <option value="Pre-Joining">Pre-Joining</option>
+          <option value="Separated">Separated (all)</option>
+          <option value="Resigned">Resigned</option>
+          <option value="Relieved">Relieved</option>
           <option value="Terminated">Terminated</option>
+          <option value="Inactive">Inactive</option>
         </select>
       </div>
     </div>
@@ -314,12 +327,9 @@ const exportToCsv = () => {
             >
               <td class="py-4 px-6">
                 <div class="flex items-center gap-3">
-                  <div
-                    @click="router.push(`/employees/${emp.id}`)"
-                    class="w-9 h-9 rounded-full bg-gradient-to-tr from-indigo-500 to-purple-500 text-white flex items-center justify-center font-bold text-xs shrink-0 cursor-pointer hover:scale-105 transition-transform"
-                  >
-                    {{ (emp.firstName || '').charAt(0) }}{{ (emp.lastName || '').charAt(0) }}
-                  </div>
+                  <button type="button" class="shrink-0 cursor-pointer hover:scale-105 transition-transform" @click="router.push(`/employees/${emp.id}`)">
+                    <EmployeeAvatar :url="emp.avatarUrl" :name="`${emp.firstName} ${emp.lastName}`" size="w-9 h-9 text-xs" />
+                  </button>
                   <div>
                     <button
                       @click="router.push(`/employees/${emp.id}`)"
@@ -346,11 +356,11 @@ const exportToCsv = () => {
                 <span
                   :class="[
                     'px-2.5 py-1 rounded-md text-xs font-semibold',
-                    emp.status === 'Active'
+                    ['Active', 'Confirmed'].includes(emp.status)
                       ? 'bg-emerald-50 dark:bg-emerald-950/50 text-emerald-600 dark:text-emerald-400'
                       : emp.status === 'On Leave'
                       ? 'bg-amber-50 dark:bg-amber-950/50 text-amber-600 dark:text-amber-400'
-                      : emp.status === 'Probation'
+                      : ['Probation', 'Notice Period', 'Offer Released', 'Pre-Joining'].includes(emp.status)
                       ? 'bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400'
                       : 'bg-rose-50 dark:bg-rose-950/50 text-rose-600 dark:text-rose-400'
                   ]"

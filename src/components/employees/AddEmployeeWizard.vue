@@ -43,10 +43,11 @@ const form = reactive({
   firstName: '', middleName: '', lastName: '', dateOfBirth: '', gender: '', nationality: '', maritalStatus: '',
   personalEmail: '', phone: '',
   address: '', city: '', state: '', postalCode: '', country: '',
+  permanentSame: 'Yes', permanentLine: '', permanentCity: '', permanentState: '', permanentPostalCode: '', permanentCountry: '',
   emergencyName: '', emergencyRelation: '', emergencyPhone: '',
   // employment
   email: '', department: '', designation: '', branch: '', grade: '', employmentType: 'Full-time', status: 'Active',
-  joiningDate: today, probationEndDate: '', salary: '' as string | number, shift: '', approvalWorkflow: '',
+  joiningDate: today, probationEndDate: '', noticePeriodDays: '' as string | number, salary: '' as string | number, shift: '', approvalWorkflow: '',
   // bank & statutory
   bankName: '', accountName: '', accountNumber: '', routingCode: '', accountType: 'Savings', panNumber: '', uanNumber: '',
   // team & access
@@ -60,7 +61,11 @@ if (props.employee) {
   const e = props.employee
   const contact = typeof e.emergencyContact === 'object' ? e.emergencyContact : { name: e.emergencyContact || '', relation: '', phone: '' }
   const a = e.addressDetails || {}
+  const pa = e.permanentAddress
   Object.assign(form, {
+    permanentSame: pa ? 'No' : 'Yes', permanentLine: pa?.line || '', permanentCity: pa?.city || '', permanentState: pa?.state || '',
+    permanentPostalCode: pa?.postalCode || '', permanentCountry: pa?.country || '',
+    noticePeriodDays: e.noticePeriodDays != null ? String(e.noticePeriodDays) : '',
     firstName: e.firstName || '', middleName: e.middleName || '', lastName: e.lastName || '',
     dateOfBirth: e.dateOfBirth || '', gender: e.gender || '', nationality: e.nationality || '', maritalStatus: e.maritalStatus || '',
     personalEmail: e.personalEmail || '', phone: e.phone || '',
@@ -68,7 +73,7 @@ if (props.employee) {
     emergencyName: contact?.name || '', emergencyRelation: contact?.relation || '', emergencyPhone: contact?.phone || '',
     email: e.email || '', department: e.department || '', designation: e.designation || '', branch: e.branch || '',
     grade: e.grade || '', employmentType: e.employmentType || 'Full-time',
-    status: ['Active', 'Probation', 'Notice Period'].includes(e.status) ? e.status : 'Active',
+    status: e.status === 'On Leave' ? 'Active' : e.status,
     joiningDate: e.joiningDate || today, probationEndDate: e.probationEndDate || '',
     salary: e.salary ? String(e.salary) : '', shift: e.shift || '', approvalWorkflow: e.approvalWorkflow || '',
     bankName: e.bankDetails?.bankName || '', accountName: e.bankDetails?.accountName || '', accountNumber: '',
@@ -94,7 +99,7 @@ const shiftOptions = computed(() => (shifts.value || []).map((s) => ({ value: s.
 const workflowOptions = computed(() => (workflows.value || []).map((w) => ({ value: w.workflowName, label: w.workflowName })))
 const peopleOptions = computed(() =>
   (employees.value || [])
-    .filter((e) => e.status !== 'Terminated')
+    .filter((e) => e.isCurrent !== false)
     .map((e) => ({ value: e.id, label: `${e.firstName} ${e.lastName} — ${e.designation}` })),
 )
 // Access roles come from HR Administration -> Roles & Permissions.
@@ -120,6 +125,13 @@ interface Field {
   validate?: (value: string) => string | null
 }
 
+const NEW_STATUSES = ['Active', 'Probation', 'Offer Released', 'Pre-Joining']
+const EDIT_STATUSES = ['Active', 'Confirmed', 'Probation', 'Notice Period', 'Offer Released', 'Pre-Joining', 'Resigned', 'Relieved', 'Terminated', 'Retired', 'Inactive']
+const permanentPayload = () =>
+  form.permanentSame === 'No'
+    ? { line: form.permanentLine.trim(), city: form.permanentCity.trim(), state: form.permanentState.trim(), postalCode: form.permanentPostalCode.trim(), country: form.permanentCountry.trim() }
+    : { line: '', city: '', state: '', postalCode: '', country: '' }
+const noticePayload = () => (String(form.noticePeriodDays).trim() === '' ? '' : Number(form.noticePeriodDays))
 const emailRule = (v: string) => (v && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v) ? 'Enter a valid email address' : null)
 
 const sections: { title: string; fields: Field[] }[][] = [
@@ -151,6 +163,17 @@ const sections: { title: string; fields: Field[] }[][] = [
       ],
     },
     {
+      title: 'Permanent address',
+      fields: [
+        { key: 'permanentSame', label: 'Same as residential address?', type: 'select', options: () => opt(['Yes', 'No']) },
+        { key: 'permanentLine', label: 'Address Line', wide: true, required: true, visible: () => form.permanentSame === 'No' },
+        { key: 'permanentCity', label: 'City', visible: () => form.permanentSame === 'No' },
+        { key: 'permanentState', label: 'State / Province', visible: () => form.permanentSame === 'No' },
+        { key: 'permanentPostalCode', label: 'Postal Code', visible: () => form.permanentSame === 'No' },
+        { key: 'permanentCountry', label: 'Country', visible: () => form.permanentSame === 'No' },
+      ],
+    },
+    {
       title: 'Emergency contact',
       fields: [
         { key: 'emergencyName', label: 'Contact Name' },
@@ -174,10 +197,12 @@ const sections: { title: string; fields: Field[] }[][] = [
     {
       title: 'Dates & compensation',
       fields: [
-        { key: 'status', label: 'Status', type: 'select', required: true, options: () => opt(editing ? ['Active', 'Probation', 'Notice Period'] : ['Active', 'Probation']) },
+        { key: 'status', label: 'Status', type: 'select', required: true, options: () => opt(editing ? EDIT_STATUSES : NEW_STATUSES) },
         { key: 'joiningDate', label: 'Joining Date', type: 'date', required: true },
         { key: 'probationEndDate', label: 'Probation End Date', type: 'date', visible: () => form.status === 'Probation',
           validate: (v) => (v && v <= form.joiningDate ? 'Must be after the joining date' : null) },
+        { key: 'noticePeriodDays', label: 'Notice Period (days)', type: 'number', placeholder: 'Company default',
+          validate: (v) => (Number(v) < 0 || Number(v) > 365 || !Number.isInteger(Number(v)) ? 'Enter 0 to 365 days' : null) },
         { key: 'salary', label: 'Annual Salary', type: 'number', required: !editing, placeholder: 'e.g. 600000',
           validate: (v) => (Number(v) < 1000 ? 'Enter the annual salary (at least 1,000)' : null) },
         { key: 'shift', label: 'Work Shift', type: 'select', options: () => shiftOptions.value },
@@ -342,7 +367,7 @@ const submit = async () => {
     dateOfBirth: form.dateOfBirth, gender: form.gender, nationality: form.nationality.trim(),
     maritalStatus: form.maritalStatus, personalEmail: form.personalEmail.trim(), phone: form.phone.trim(),
     address: form.address.trim(), city: form.city.trim(), state: form.state.trim(), postalCode: form.postalCode.trim(),
-    country: form.country.trim(),
+    country: form.country.trim(), permanentAddress: permanentPayload(), noticePeriodDays: noticePayload(),
     emergencyContact: form.emergencyName ? { name: form.emergencyName, relation: form.emergencyRelation, phone: form.emergencyPhone } : undefined,
     email: form.email.trim(), department: form.department, designation: form.designation.trim(), branch: form.branch,
     grade: form.grade, employmentType: form.employmentType, status: form.status, joiningDate: form.joiningDate,
@@ -398,7 +423,7 @@ const saveChanges = async () => {
     dateOfBirth: form.dateOfBirth, gender: form.gender, nationality: form.nationality.trim(),
     maritalStatus: form.maritalStatus, personalEmail: form.personalEmail.trim(), phone: form.phone.trim(),
     address: form.address.trim(), city: form.city.trim(), state: form.state.trim(), postalCode: form.postalCode.trim(),
-    country: form.country.trim(),
+    country: form.country.trim(), permanentAddress: permanentPayload(), noticePeriodDays: noticePayload(),
     emergencyContact: { name: form.emergencyName.trim(), relation: form.emergencyRelation.trim(), phone: form.emergencyPhone.trim() },
     email: form.email.trim(), department: form.department, designation: form.designation.trim(), branch: form.branch,
     grade: form.grade, employmentType: form.employmentType, status: form.status, joiningDate: form.joiningDate,

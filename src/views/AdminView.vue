@@ -172,7 +172,7 @@ const isDeptModalOpen = ref(false)
 const deptForm = ref({ id: '', name: '', code: '', head: '', budget: 0 })
 const deptFormError = ref('')
 const headOptions = computed(() =>
-  (employees.value || []).filter((e) => e.status !== 'Terminated').map((e) => `${e.firstName} ${e.lastName}`),
+  (employees.value || []).filter((e) => e.isCurrent !== false).map((e) => `${e.firstName} ${e.lastName}`),
 )
 const openDeptModal = (dept?: Department) => {
   deptFormError.value = ''

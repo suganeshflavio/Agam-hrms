@@ -12,6 +12,7 @@ import type {
   ApprovalWorkflow,
   Employee,
   EmployeeDocument,
+  ProbationRecord,
   OnboardingCandidate,
   Shift,
   AttendanceRecord,
@@ -58,6 +59,7 @@ export const hrmsApi = createApi({
     'MasterData',
     'Workflows',
     'Notifications',
+    'Probation',
   ],
   endpoints: (builder) => ({
     // Dashboard Stats (Release 1)
@@ -258,6 +260,35 @@ export const hrmsApi = createApi({
         return runQuery(() => apiRequest(`/app/employees/${id}`, { method: 'DELETE' }))
       },
       invalidatesTags: ['Employees', 'Stats'],
+    }),
+    uploadEmployeePhoto: builder.mutation<Employee, { employeeId: string; file: File }>({
+      async queryFn({ employeeId, file }) {
+        const body = new FormData()
+        body.append('photo', file)
+        return runQuery(() => apiRequest(`/app/employees/${employeeId}/photo`, { method: 'POST', body }))
+      },
+      invalidatesTags: ['Employees'],
+    }),
+    removeEmployeePhoto: builder.mutation<Employee, string>({
+      async queryFn(employeeId) {
+        return runQuery(() => apiRequest(`/app/employees/${employeeId}/photo`, { method: 'DELETE' }))
+      },
+      invalidatesTags: ['Employees'],
+    }),
+    getProbation: builder.query<ProbationRecord[], void>({
+      async queryFn() {
+        return runQuery(() => apiRequest('/app/probation'))
+      },
+      providesTags: ['Probation'],
+    }),
+    reviewProbation: builder.mutation<
+      ProbationRecord,
+      { employeeId: string; outcome: 'feedback' | 'confirm' | 'extend'; feedback?: string; rating?: number; recommendation?: 'confirm' | 'extend'; newEndDate?: string }
+    >({
+      async queryFn({ employeeId, ...body }) {
+        return runQuery(() => apiRequest(`/app/employees/${employeeId}/probation`, { method: 'POST', body }))
+      },
+      invalidatesTags: ['Probation', 'Employees', 'Stats'],
     }),
     recordTransferPromotion: builder.mutation<Employee, { employeeId: string; payload: { type: 'Promotion' | 'Transfer'; newRole?: string; newDepartment?: string; newSalary?: number } }>({
       async queryFn({ employeeId, payload }) {
